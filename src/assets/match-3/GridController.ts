@@ -1,61 +1,75 @@
 ﻿import { CellCoord, GridModel } from './GridModel';
-import { type IGridView } from './IGridView';
+import type { IGridView } from './IGridView';
 
 export class GridController {
     private selected: CellCoord | null = null;
     private pointerDownCell: CellCoord | null = null;
-    private isAnimating = false;
-    private model : GridModel;
-    private view : IGridView;
+    private isBusy = false;
+    private model: GridModel;
+    private view: IGridView;
 
     constructor(model: GridModel, view: IGridView) {
-        this.view = view;
         this.model = model;
+        this.view = view;
         this.view.renderInitial(model.serialize());
-        this.model.on((event, payload) => this.handleModelEvent(event, payload));
-        this.view.onCellPointerDown((cell) => this.handlePointerDown(cell));
-        this.view.onCellPointerUp((cell) => this.handlePointerUp(cell));
+        this.view.onCellPointerDown(cell => this.handlePointerDown(cell));
+        this.view.onCellPointerUp(cell => this.handlePointerUp(cell));
     }
 
-    private handlePointerDown(cell: CellCoord) {
-        if (this.isAnimating) return;
+    private handlePointerDown(cell: CellCoord): void {
+        if (this.isBusy) return;
         this.pointerDownCell = cell;
 
         if (this.selected && this.model.areAdjacent(this.selected, cell)) {
-            this.attemptSwap(this.selected, cell); // two-click swap
+            const a = this.selected;
             this.selected = null;
             this.view.clearHighlight();
+            void this.swap(a, cell); // two-click swap
         } else {
             this.selected = cell;
             this.view.highlightCell(cell);
         }
     }
 
-    private handlePointerUp(cell: CellCoord) {
-        if (this.isAnimating || !this.pointerDownCell) return;
+    private handlePointerUp(cell: CellCoord): void {
+        if (this.isBusy || !this.pointerDownCell) return;
         const down = this.pointerDownCell;
         this.pointerDownCell = null;
 
         const moved = down.row !== cell.row || down.col !== cell.col;
         if (moved && this.model.areAdjacent(down, cell)) {
-            this.attemptSwap(down, cell); // drag swap
             this.selected = null;
             this.view.clearHighlight();
+            void this.swap(down, cell); // drag swap
         }
     }
 
-    private attemptSwap(a: CellCoord, b: CellCoord) {
-        this.isAnimating = true;
-        this.model.trySwap(a, b);
+    private async swap(a: CellCoord, b: CellCoord): Promise<void> {
+        this.isBusy = true;
+        const matches = this.model.trySwap(a, b);
+
+        if (!matches) {
+            await this.view.animateInvalidSwap(a, b);
+            this.isBusy = false;
+            return;
+        }
+
+        await this.view.animateSwap(a, b);
+        await this.resolveMatches(matches);
+        this.isBusy = false;
     }
 
-    private async handleModelEvent(event: string, payload: any) {
-        switch (event) {
-            case 'swap': await this.view.animateSwap(payload.a, payload.b); break;
-            case 'invalidSwap': await this.view.animateInvalidSwap(payload.a, payload.b); this.isAnimating = false; break;
-            case 'matched': await this.view.animateMatched(payload.cells); break;
-            case 'collapse': await this.view.animateCollapse(payload.moves, payload.spawns); break;
-            case 'settled': this.isAnimating = false; break;
+    private async resolveMatches(matches: CellCoord[][]): Promise<void> {
+        let current: CellCoord[][] | null = matches;
+        while (current) {
+            const cleared = this.model.clearMatches(current);
+            await this.view.animateMatched(cleared);
+
+            const moves = this.model.collapse();
+            await this.view.animateCollapse(moves);
+
+            const next = this.model.findMatches();
+            current = next.length > 0 ? next : null;
         }
     }
 }

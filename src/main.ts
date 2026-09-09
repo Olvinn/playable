@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { GridModel } from './assets/match-3/GridModel';
+import { ThreeGridView } from './assets/match-3/ThreeGridView';
+import { GridController } from './assets/match-3/GridController';
+import { GridGenerator } from "./assets/match-3/GridGenerator.ts";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a2e);
@@ -33,19 +37,21 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-import { GridModel } from './assets/match-3/GridModel';
-import { ThreeGridView } from './assets/match-3/ThreeGridView';
-import { GridController } from './assets/match-3/GridController';
-
-// ...after your existing renderer/scene/camera setup
-
-const gridModel = new GridModel(8, 16, 5); // 3 rows, 6 cols, 5 colors
-const gridView = new ThreeGridView({ rows: 8, cols: 16, renderer, anchorY: -4, cellSize: .3, gap: 0.05 });
+const gridGenerator = new GridGenerator({ rows: 8, cols: 16, colorCount: 5 });
+const gridModel = new GridModel(gridGenerator);
+const gridView = new ThreeGridView({
+    rows: 8,
+    cols: 16,
+    renderer,
+    marginLeft: 0.04,
+    marginRight: 0.04,
+    marginBottom: 0.05,
+    minCellSize: 0.15,
+    maxCellSize: 0.6,
+});
 const gridController = new GridController(gridModel, gridView);
 
 window.addEventListener('resize', () => gridView.handleResize());
-
-// inside your existing animate() loop, after renderer.render(scene, camera):
 
 function animate() {
     requestAnimationFrame(animate);
