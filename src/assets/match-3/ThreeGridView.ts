@@ -12,13 +12,9 @@ export interface ThreeGridViewOptions {
     depthRatio?: number;
     cameraFov?: number;
     cameraTiltDeg?: number;
-    /** Fraction of screen width reserved as empty space on the left. */
     marginLeft?: number;
-    /** Fraction of screen width reserved as empty space on the right. */
     marginRight?: number;
-    /** Fraction of screen height reserved as empty space below the grid. */
     marginBottom?: number;
-    /** Ratio of gap to cell size, e.g. 0.15 = gap is 15% of a cell's size. */
     gapRatio?: number;
     minCellSize?: number;
     maxCellSize?: number;
@@ -45,12 +41,6 @@ export class ThreeGridView implements IGridView {
     private matchDurationMs: number;
     private collapseDurationMs: number;
 
-    /**
-     * Fixed arbitrary depth used only as a computation basis for the
-     * FOV/distance -> visible-size formulas below. Its literal value doesn't
-     * affect what's rendered: cellSize and camera position are both derived
-     * from it and scale together, so any positive number here is equivalent.
-     */
     private readonly cameraDistance = 10;
 
     private renderer: THREE.WebGLRenderer;
@@ -191,11 +181,22 @@ export class ThreeGridView implements IGridView {
         }
     }
 
-    /**
-     * Recomputes cell size, horizontal centering offset, and camera framing
-     * from the current screen size and margins, then repositions every box.
-     * Single code path used by both the constructor and handleResize.
-     */
+    /** Current on-screen cell size (world units). Used to size physics colliders/spheres to match. */
+    getCellSize(): number {
+        return this.cellSize;
+    }
+
+    /** Current gap between cells (world units). */
+    getGap(): number {
+        return this.gap;
+    }
+
+    /** Cell center in the same XY plane the physics engine operates in (z dropped). */
+    getCellCenter2D(row: number, col: number): THREE.Vector2 {
+        const pos = this.cellWorldPos(row, col);
+        return new THREE.Vector2(pos.x, pos.y);
+    }
+
     private applyLayout(): void {
         const aspect = window.innerWidth / window.innerHeight;
         const fovRad = THREE.MathUtils.degToRad(this.cameraFov);
@@ -224,13 +225,6 @@ export class ThreeGridView implements IGridView {
         }
     }
 
-    /**
-     * Points the camera at a spot below the grid's true vertical center so
-     * marginBottom of the visible frustum falls below the grid's bottom row
-     * (which is anchored at world Y = 0). This replaces the old "always
-     * look at the grid's center" behavior, which made vertical position
-     * uncontrollable.
-     */
     private positionCamera(visibleHeight: number): void {
         const lookAtY = visibleHeight * (0.5 - this.marginBottom);
         const tilt = THREE.MathUtils.degToRad(this.cameraTiltDeg);
@@ -243,7 +237,6 @@ export class ThreeGridView implements IGridView {
         this.camera.lookAt(0, lookAtY, 0);
     }
 
-    /** Bottom row is anchored at world Y = 0; rows stack upward from there. */
     private cellWorldPos(row: number, col: number): THREE.Vector3 {
         const step = this.cellSize + this.gap;
         const totalWidth = (this.cols - 1) * step;

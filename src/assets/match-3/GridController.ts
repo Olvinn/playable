@@ -1,16 +1,23 @@
 ﻿import { CellCoord, GridModel } from './GridModel';
 import type { IGridView } from './IGridView';
 
+export interface GridControllerOptions {
+    /** Called once a swap's matches/clears/collapses have fully settled — the right time to resync anything derived from the board, e.g. physics colliders. Not called on an invalid (reverted) swap, since the board didn't change. */
+    onBoardChanged?: () => void;
+}
+
 export class GridController {
     private selected: CellCoord | null = null;
     private pointerDownCell: CellCoord | null = null;
     private isBusy = false;
     private model: GridModel;
     private view: IGridView;
+    private onBoardChanged: (() => void) | null;
 
-    constructor(model: GridModel, view: IGridView) {
+    constructor(model: GridModel, view: IGridView, options: GridControllerOptions = {}) {
         this.model = model;
         this.view = view;
+        this.onBoardChanged = options.onBoardChanged ?? null;
         this.view.renderInitial(model.serialize());
         this.view.onCellPointerDown(cell => this.handlePointerDown(cell));
         this.view.onCellPointerUp(cell => this.handlePointerUp(cell));
@@ -24,7 +31,7 @@ export class GridController {
             const a = this.selected;
             this.selected = null;
             this.view.clearHighlight();
-            void this.swap(a, cell); // two-click swap
+            void this.swap(a, cell);
         } else {
             this.selected = cell;
             this.view.highlightCell(cell);
@@ -40,7 +47,7 @@ export class GridController {
         if (moved && this.model.areAdjacent(down, cell)) {
             this.selected = null;
             this.view.clearHighlight();
-            void this.swap(down, cell); // drag swap
+            void this.swap(down, cell);
         }
     }
 
@@ -57,6 +64,7 @@ export class GridController {
         await this.view.animateSwap(a, b);
         await this.resolveMatches(matches);
         this.isBusy = false;
+        this.onBoardChanged?.();
     }
 
     private async resolveMatches(matches: CellCoord[][]): Promise<void> {
