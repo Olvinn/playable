@@ -10,7 +10,5 @@ export interface IGridView {
     onCellPointerUp(cb: (cell: CellCoord) => void): void;
     highlightCell(cell: CellCoord): void;
     clearHighlight(): void;
-    render(): void;
-    handleResize(): void;
     dispose(): void;
 }
