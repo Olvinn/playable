@@ -1,5 +1,6 @@
 ﻿import * as THREE from 'three';
 import { PhysicsSphere } from './PhysicsSphere';
+import { PhysicsBox } from './PhysicsBox';
 import { SquareCollider } from './colliders/SquareCollider.ts';
 import { LineCollider } from './colliders/LineCollider.ts';
 import { SegmentCollider } from './colliders/SegmentCollider.ts';
@@ -49,7 +50,7 @@ export class CollisionResolver {
         }
     }
 
-    resolve(spheres: PhysicsSphere[]): void {
+    resolve(spheres: PhysicsSphere[], boxes: PhysicsBox[] = []): void {
         this.sphereGrid.clear();
         for (const sphere of spheres) {
             this.sphereGrid.insert(sphere.collider.center.x, sphere.collider.center.y, sphere);
@@ -58,9 +59,15 @@ export class CollisionResolver {
         for (const sphere of spheres) {
             this.resolveAgainstPlanes(sphere);
             this.resolveAgainstSegments(sphere);
-            this.resolveAgainstBoxes(sphere);
+            this.resolveAgainstGridBoxes(sphere);
             this.resolveAgainstPushers(sphere);
             this.resolveAgainstNeighborSpheres(sphere);
+        }
+
+        for (const box of boxes) {
+            this.resolveDynamicBoxAgainstPlanes(box);
+            this.resolveDynamicBoxAgainstSegments(box);
+            this.resolveDynamicBoxAgainstSpheres(box);
         }
     }
 
@@ -94,7 +101,7 @@ export class CollisionResolver {
         }
     }
 
-    private resolveAgainstBoxes(sphere: PhysicsSphere): void {
+    private resolveAgainstGridBoxes(sphere: PhysicsSphere): void {
         const candidates = this.boxGrid.queryNeighbors(sphere.collider.center.x, sphere.collider.center.y);
 
         for (const box of candidates) {
@@ -162,10 +169,75 @@ export class CollisionResolver {
         }
     }
 
-    private reflectVelocity(sphere: PhysicsSphere, normal: THREE.Vector2): void {
-        const speedAlongNormal = sphere.velocity.dot(normal);
+    /** Box vs walls/planes use a bounding-circle radius — a deliberate simplification, fine for a platform sliding along an axis-aligned tube. */
+    private resolveDynamicBoxAgainstPlanes(box: PhysicsBox): void {
+        const radius = this.boundingRadius(box);
+        for (const plane of this.planes) {
+            const distance = plane.signedDistanceTo(box.collider.center);
+            const penetration = radius - distance;
+            if (penetration <= 0) continue;
+
+            box.collider.center.addScaledVector(plane.normal, penetration);
+            this.reflectVelocity(box, plane.normal);
+        }
+    }
+
+    private resolveDynamicBoxAgainstSegments(box: PhysicsBox): void {
+        const radius = this.boundingRadius(box);
+        for (const segment of this.segments) {
+            const closest = segment.closestPointTo(box.collider.center, this.segmentClosestScratch);
+            const delta = this.deltaScratch.subVectors(box.collider.center, closest);
+            const distanceSq = delta.lengthSq();
+            if (distanceSq >= radius * radius) continue;
+
+            const distance = Math.sqrt(distanceSq);
+            const normal = distance > 1e-6
+                ? delta.multiplyScalar(1 / distance)
+                : new THREE.Vector2(0, 1);
+
+            const penetration = radius - distance;
+            box.collider.center.addScaledVector(normal, penetration);
+            this.reflectVelocity(box, normal);
+        }
+    }
+
+    /** Exact AABB-vs-circle contact, bidirectional — this is what lets the box rest on top of the marble pile and sink as it drains. */
+    private resolveDynamicBoxAgainstSpheres(box: PhysicsBox): void {
+        const candidates = this.sphereGrid.queryNeighbors(box.collider.center.x, box.collider.center.y);
+
+        for (const sphere of candidates) {
+            const closest = box.collider.closestPointTo(sphere.collider.center, this.closestPointScratch);
+            const delta = this.deltaScratch.subVectors(sphere.collider.center, closest);
+            const distanceSq = delta.lengthSq();
+            const radius = sphere.collider.radius;
+            if (distanceSq >= radius * radius) continue;
+
+            const distance = Math.sqrt(distanceSq);
+            const normal = distance > 1e-6
+                ? delta.multiplyScalar(1 / distance)
+                : new THREE.Vector2(0, 1);
+
+            const penetration = radius - distance;
+            const totalMass = box.mass + sphere.mass;
+            const boxShare = sphere.mass / totalMass;
+            const sphereShare = box.mass / totalMass;
+
+            box.collider.center.addScaledVector(normal, -penetration * boxShare);
+            sphere.collider.center.addScaledVector(normal, penetration * sphereShare);
+
+            this.reflectVelocity(box, normal.clone().negate());
+            this.reflectVelocity(sphere, normal);
+        }
+    }
+
+    private boundingRadius(box: PhysicsBox): number {
+        return Math.hypot(box.collider.halfExtents.x, box.collider.halfExtents.y);
+    }
+
+    private reflectVelocity(body: { velocity: THREE.Vector2; restitution: number }, normal: THREE.Vector2): void {
+        const speedAlongNormal = body.velocity.dot(normal);
         if (speedAlongNormal >= 0) return;
 
-        sphere.velocity.addScaledVector(normal, -speedAlongNormal * (1 + sphere.restitution));
+        body.velocity.addScaledVector(normal, -speedAlongNormal * (1 + body.restitution));
     }
 }

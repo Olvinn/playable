@@ -10,7 +10,7 @@ import { CollisionResolver } from './assets/match-3/physics/CollisionResolver';
 import { LineCollider } from './assets/match-3/physics/colliders/LineCollider';
 import { SphereSpawner } from './assets/match-3/SphereSpawner';
 import { TubeView } from './assets/match-3/TubeView';
-import { MarblePusher } from './assets/match-3/MarblePusher';
+import { PlatformCharacter } from './assets/match-3/PlatformCharacter';
 import { NeckPath } from './assets/match-3/NeckPath';
 import { createNeckProfile } from './assets/match-3/NeckProfile';
 import { buildSCurveWaypoints } from './assets/match-3/NeckWaypoints';
@@ -26,15 +26,16 @@ const GRID_CELL_SIZE = 0.5;
 const GRID_CELL_GAP = 0.03;
 const GRID_COLOR_COUNT = 3;
 
-// --- Camera ---
+// --- Camera --- (narrow FOV + long distance reads as near-orthographic while the tilt still sells depth)
 const CAMERA_WIDTH_FRACTION = 0.9;
-const CAMERA_BASE_FOV_DEG = 40;
-const CAMERA_MIN_FOV_DEG = 22;
-const CAMERA_MAX_FOV_DEG = 65;
-const CAMERA_MIN_DISTANCE = 5;
-const CAMERA_MAX_DISTANCE = 18;
+const CAMERA_BASE_FOV_DEG = 12;
+const CAMERA_MIN_FOV_DEG = 8;
+const CAMERA_MAX_FOV_DEG = 20;
+const CAMERA_MIN_DISTANCE = 30;
+const CAMERA_MAX_DISTANCE = 100;
 const CAMERA_TILT_DEG = 16;
 const CAMERA_MARGIN_BOTTOM = 0.05;
+const CAMERA_FAR_PLANE = 300; // pushed out to match the much larger camera distance above
 
 // --- Physics ---
 const PHYSICS_GRAVITY = 9.8;
@@ -42,36 +43,40 @@ const PHYSICS_MAX_SPEED = 25;
 
 // --- Marbles ---
 const SPHERE_RADIUS = 0.15;
-const SPHERE_TOTAL_COUNT = 220;
+const SPHERE_TOTAL_COUNT = 6000; // deliberately exceeds the tube's packing capacity so it always spawns completely full
 const SPHERE_MASS = 1;
 const SPHERE_RESTITUTION = 0.15;
 const SPHERE_PACKING_FACTOR = 1.1;
 const SPHERE_JITTER = 0.15;
 const SPHERE_COLORS = [0xffffff];
+const MARBLE_FILL_START_T = 0.07; // leaves a gap at the very top of the tube for the platform to rest into
 
-// --- Curved bottleneck (neck = narrow top path, mouth = wide bottom pool) ---
+// --- Bottleneck (neck = narrow top path, mouth = wide bottom pool) ---
 const NECK_HALF_WIDTH = 0.55;       // widened from the previous thread-thin 0.28
 const MOUTH_HALF_WIDTH = 3.0;
-const NECK_FRACTION = 0.65;         // stays neck-width until 65% along, so the mid-path gate sits in the narrow section
+const NECK_FRACTION = 0.9;         // stays neck-width until 65% along, so the mid-path gate sits in the narrow section
 const TUBE_SEGMENTS = 32;
 const TUBE_WALL_THICKNESS = 0.2;
-const TUBE_HEIGHT = 6.0;
-const TUBE_CURVE_SWING = 1.3;       // wider swing for a visibly winding path
-const TUBE_CURVE_WAVES = 2;         // sin(t*PI*waves) needs a full period (waves=2) for a true S — waves=1 only makes a single "C" hump
+const TUBE_HEIGHT = 18.0;
+const TUBE_CURVE_SWING = 0;         // 0 = straight tube for now; the S-curve machinery stays for later
+const TUBE_CURVE_WAVES = 2;
 const TUBE_CURVE_SAMPLES = 14;
-const TUBE_GAP_ABOVE_GRID = 0.3;
+const TUBE_GAP_ABOVE_GRID = 0.2;
 
-// --- Pusher: continuous gentle creep, no extend/retract stroke ---
-const PUSHER_START_T = 0.05;
-const PUSHER_ADVANCE_SPEED = 0.03; // arc-length fraction per second — tune this for how "gentle" the push feels
-const PUSHER_WALL_CLEARANCE = 0.04;
-const PUSHER_THICKNESS = 0.14;
-const PUSHER_COLOR = 0xdd8844;
+// --- Rescue platform + character (a box for now) ---
+const PLATFORM_START_T = 0.02; // starts right at the top of the tube, on top of the fully-packed pile
+const PLATFORM_HALF_WIDTH = NECK_HALF_WIDTH * 0.8;
+const PLATFORM_HALF_THICKNESS = 0.06;
+const PLATFORM_MASS = 8;
+const PLATFORM_RESTITUTION = 0.05;
+const PLATFORM_COLOR = 0x8899aa;
+const CHARACTER_SIZE = 0.3;
+const CHARACTER_COLOR = 0xff4477;
 
 // --- Render depths ---
 const DEPTH_TUBE_WALLS = 0.4;
-const DEPTH_PUSHER = 0.42;
-const DEPTH_SPHERE_BASE = 0.5;
+const DEPTH_PLATFORM = 0.5;
+const DEPTH_SPHERE_BASE = -0.1; // pulled back from the grid boxes' front face so marbles don't visually poke through cell edges
 const DEPTH_SPHERE_JITTER = 0.05;
 
 // ============================================================
@@ -81,7 +86,7 @@ const DEPTH_SPHERE_JITTER = 0.05;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a2e);
 
-const camera = new THREE.PerspectiveCamera(CAMERA_BASE_FOV_DEG, window.innerWidth / window.innerHeight, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(CAMERA_BASE_FOV_DEG, window.innerWidth / window.innerHeight, 0.1, CAMERA_FAR_PLANE);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -196,26 +201,7 @@ collisionResolver.setPlanes([
 collisionResolver.setSegments([...tubeView.colliders]);
 
 // ============================================================
-// PUSHER — creeps gently forward, stopped short of the closed gate
-// ============================================================
-
-const marblePusher = new MarblePusher({
-    scene,
-    path: neckPath,
-    startT: PUSHER_START_T,
-    maxT: 1,
-    advanceSpeed: PUSHER_ADVANCE_SPEED,
-    halfWidth: neckProfile(PUSHER_START_T) - PUSHER_WALL_CLEARANCE,
-    thickness: PUSHER_THICKNESS,
-    color: PUSHER_COLOR,
-    renderDepth: DEPTH_PUSHER,
-});
-
-// Pusher's collider is mutated in place each frame; the resolver just needs the reference once.
-collisionResolver.setPushers([marblePusher.getCollider()]);
-
-// ============================================================
-// SPAWN MARBLES — packed along the whole curved tube
+// SPAWN MARBLES — packed along the whole tube
 // ============================================================
 
 const spawner = new SphereSpawner({
@@ -238,10 +224,28 @@ spawner.spawnAll([
         kind: 'path',
         path: neckPath,
         halfWidthAt: neckProfile,
-        startT: PUSHER_START_T + 0.02, // stay clear of the pusher's starting position
+        startT: MARBLE_FILL_START_T,
         endT: 1,
     },
 ]);
+
+// ============================================================
+// RESCUE PLATFORM + CHARACTER — starts resting on top of the full pile
+// ============================================================
+
+const platformCharacter = new PlatformCharacter({
+    scene,
+    world: physicsWorld,
+    position: neckPath.getPoint(PLATFORM_START_T),
+    platformHalfWidth: PLATFORM_HALF_WIDTH,
+    platformHalfThickness: PLATFORM_HALF_THICKNESS,
+    characterSize: CHARACTER_SIZE,
+    mass: PLATFORM_MASS,
+    restitution: PLATFORM_RESTITUTION,
+    platformColor: PLATFORM_COLOR,
+    characterColor: CHARACTER_COLOR,
+    renderDepth: DEPTH_PLATFORM,
+});
 
 // ============================================================
 // RESIZE + MAIN LOOP
@@ -259,13 +263,13 @@ function animate() {
     const deltaSeconds = Math.min((now - lastTime) / 1000, 1 / 30);
     lastTime = now;
 
-    marblePusher.update(deltaSeconds);
     spawner.update();
+    platformCharacter.sync();
     physicsWorld.step(deltaSeconds);
 
-    // TODO (win condition, not implemented yet): once neckGate's zone is
-    // clear of both spheres and the pusher (marblePusher.hasReachedLimit()
-    // relaxed alongside neckGate.setOpenAmount(1)), that's the win state.
+    // TODO (win/lose, not implemented yet): a timer counting down, and a win
+    // check once the door's zone is clear of marbles and the platform/
+    // character has reached it.
 
     renderer.render(scene, camera);
 }
