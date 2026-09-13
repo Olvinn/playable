@@ -2,42 +2,21 @@
 
 export interface AdaptiveCameraOptions {
     camera: THREE.PerspectiveCamera;
-    /** World-space width of the content (e.g. the grid) the camera keeps framed. */
     contentWidth: number;
-    /** Fraction of screen width the content should fill, e.g. 0.9 = 90%. */
     widthFraction?: number;
-    /** Preferred vertical FOV in degrees — distance is solved to hit the target width at this FOV. */
     baseFov?: number;
     minFov?: number;
     maxFov?: number;
-    baseDistance?: number;
     minDistance?: number;
     maxDistance?: number;
-    /** Downward tilt of the camera, in degrees. */
     tiltDeg?: number;
-    /** Fraction of screen height reserved as empty space below the content's bottom edge (world Y = 0). */
     marginBottom?: number;
 }
 
 /**
- * Owns fov/distance/position for a single shared PerspectiveCamera, so grid,
- * physics, and any other view all render through one camera into one scene.
- *
- * Framing is solved for a FIXED world-space content width — grid cell size
- * and physics object sizes never change at runtime, only the camera does.
- * This means physics colliders and tube geometry, defined once in fixed
- * world units, never need to be resynced on resize.
- *
- * Distance is the primary adaptive parameter: given the baseline FOV, solve
- * distance so the content exactly fills widthFraction of the screen. If
- * that distance falls outside [minDistance, maxDistance], clamp it and
- * solve FOV instead so the fit is still exact at the clamped distance.
- *
- * Reacts to screen WIDTH changes only — a resize where only height changed
- * (e.g. a mobile browser's address bar collapsing) doesn't re-solve
- * fov/distance, so framing doesn't jump around for a non-gameplay viewport
- * quirk. camera.aspect is still updated on every resize regardless, since
- * rendering with the wrong aspect would visibly distort everything.
+ * Owns fov/distance/position for a single shared PerspectiveCamera.
+ * Distance is fully solved from contentWidth/widthFraction/baseFov — it's
+ * not a separate input, only the min/max clamp is configurable.
  */
 export class AdaptiveCamera {
     private camera: THREE.PerspectiveCamera;

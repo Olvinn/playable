@@ -10,13 +10,78 @@ import { CollisionResolver } from './assets/match-3/physics/CollisionResolver';
 import { LineCollider } from './assets/match-3/physics/colliders/LineCollider';
 import { SphereSpawner } from './assets/match-3/SphereSpawner';
 import { TubeView } from './assets/match-3/TubeView';
-import { DoorPair } from './assets/match-3/DoorPair';
+import { MarblePusher } from './assets/match-3/MarblePusher';
+import { NeckPath } from './assets/match-3/NeckPath';
+import { createNeckProfile } from './assets/match-3/NeckProfile';
+import { buildSCurveWaypoints } from './assets/match-3/NeckWaypoints';
 
-// --- Renderer, single shared scene/camera ---
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+// --- Grid ---
+const GRID_ROWS = 8;
+const GRID_COLS = 11;
+const GRID_CELL_SIZE = 0.5;
+const GRID_CELL_GAP = 0.03;
+const GRID_COLOR_COUNT = 3;
+
+// --- Camera ---
+const CAMERA_WIDTH_FRACTION = 0.9;
+const CAMERA_BASE_FOV_DEG = 40;
+const CAMERA_MIN_FOV_DEG = 22;
+const CAMERA_MAX_FOV_DEG = 65;
+const CAMERA_MIN_DISTANCE = 5;
+const CAMERA_MAX_DISTANCE = 18;
+const CAMERA_TILT_DEG = 16;
+const CAMERA_MARGIN_BOTTOM = 0.05;
+
+// --- Physics ---
+const PHYSICS_GRAVITY = 9.8;
+const PHYSICS_MAX_SPEED = 25;
+
+// --- Marbles ---
+const SPHERE_RADIUS = 0.15;
+const SPHERE_TOTAL_COUNT = 220;
+const SPHERE_MASS = 1;
+const SPHERE_RESTITUTION = 0.15;
+const SPHERE_PACKING_FACTOR = 1.1;
+const SPHERE_JITTER = 0.15;
+const SPHERE_COLORS = [0xffffff];
+
+// --- Curved bottleneck (neck = narrow top path, mouth = wide bottom pool) ---
+const NECK_HALF_WIDTH = 0.55;       // widened from the previous thread-thin 0.28
+const MOUTH_HALF_WIDTH = 3.0;
+const NECK_FRACTION = 0.65;         // stays neck-width until 65% along, so the mid-path gate sits in the narrow section
+const TUBE_SEGMENTS = 32;
+const TUBE_WALL_THICKNESS = 0.2;
+const TUBE_HEIGHT = 6.0;
+const TUBE_CURVE_SWING = 1.3;       // wider swing for a visibly winding path
+const TUBE_CURVE_WAVES = 2;         // sin(t*PI*waves) needs a full period (waves=2) for a true S — waves=1 only makes a single "C" hump
+const TUBE_CURVE_SAMPLES = 14;
+const TUBE_GAP_ABOVE_GRID = 0.3;
+
+// --- Pusher: continuous gentle creep, no extend/retract stroke ---
+const PUSHER_START_T = 0.05;
+const PUSHER_ADVANCE_SPEED = 0.03; // arc-length fraction per second — tune this for how "gentle" the push feels
+const PUSHER_WALL_CLEARANCE = 0.04;
+const PUSHER_THICKNESS = 0.14;
+const PUSHER_COLOR = 0xdd8844;
+
+// --- Render depths ---
+const DEPTH_TUBE_WALLS = 0.4;
+const DEPTH_PUSHER = 0.42;
+const DEPTH_SPHERE_BASE = 0.5;
+const DEPTH_SPHERE_JITTER = 0.05;
+
+// ============================================================
+// SETUP
+// ============================================================
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a2e);
 
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(CAMERA_BASE_FOV_DEG, window.innerWidth / window.innerHeight, 0.1, 100);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -28,117 +93,159 @@ const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
 dirLight.position.set(3, 5, 4);
 scene.add(dirLight);
 
-// --- Match-3 grid ---
-const ROWS = 8;
-const COLS = 12;
-const CELL_SIZE = 0.5;
-const GAP = CELL_SIZE * 0.15;
-const CELL_PITCH = CELL_SIZE + GAP;
-const GRID_WIDTH = COLS * CELL_SIZE + (COLS - 1) * GAP;
+// ============================================================
+// MATCH-3 GRID
+// ============================================================
 
-const gridGenerator = new GridGenerator({ rows: ROWS, cols: COLS, colorCount: 4 });
+const gridGenerator = new GridGenerator({ rows: GRID_ROWS, cols: GRID_COLS, colorCount: GRID_COLOR_COUNT });
 const gridModel = new GridModel(gridGenerator);
 const gridView = new ThreeGridView({
-    rows: ROWS,
-    cols: COLS,
+    rows: GRID_ROWS,
+    cols: GRID_COLS,
     scene,
     camera,
     renderer,
-    cellSize: CELL_SIZE,
-    gap: GAP,
+    cellSize: GRID_CELL_SIZE,
+    gap: GRID_CELL_GAP,
 });
+
+const gridWidth = GRID_COLS * GRID_CELL_SIZE + (GRID_COLS - 1) * GRID_CELL_GAP;
+const gridCellPitch = GRID_CELL_SIZE + GRID_CELL_GAP;
 
 const adaptiveCamera = new AdaptiveCamera({
     camera,
-    contentWidth: GRID_WIDTH,
-    widthFraction: 0.9,
-    baseFov: 40,
-    minFov: 22,
-    maxFov: 65,
-    baseDistance: 10,
-    minDistance: 5,
-    maxDistance: 18,
-    tiltDeg: 16,
-    marginBottom: 0.05,
+    contentWidth: gridWidth,
+    widthFraction: CAMERA_WIDTH_FRACTION,
+    baseFov: CAMERA_BASE_FOV_DEG,
+    minFov: CAMERA_MIN_FOV_DEG,
+    maxFov: CAMERA_MAX_FOV_DEG,
+    minDistance: CAMERA_MIN_DISTANCE,
+    maxDistance: CAMERA_MAX_DISTANCE,
+    tiltDeg: CAMERA_TILT_DEG,
+    marginBottom: CAMERA_MARGIN_BOTTOM,
 });
 
-const collisionResolver = new CollisionResolver({ cellSize: CELL_PITCH });
-const physicsWorld = new PhysicsWorld(collisionResolver, { gravity: 9.8, maxSpeed: 25 });
+// ============================================================
+// PHYSICS WORLD
+// ============================================================
+
+const collisionResolver = new CollisionResolver({ cellSize: gridCellPitch });
+const physicsWorld = new PhysicsWorld(collisionResolver, { gravity: PHYSICS_GRAVITY, maxSpeed: PHYSICS_MAX_SPEED });
 
 function syncBoxColliders(): void {
     collisionResolver.setBoxColliders(buildGridColliders(gridModel, gridView));
 }
 
-const gridController = new GridController(gridModel, gridView, { onBoardChanged: syncBoxColliders });
+new GridController(gridModel, gridView, { onBoardChanged: syncBoxColliders });
 syncBoxColliders();
 
-const leftEdge = gridView.getCellCenter2D(0, 0).x - CELL_PITCH / 2;
-const rightEdge = gridView.getCellCenter2D(0, COLS - 1).x + CELL_PITCH / 2;
-const topRowY = gridView.getCellCenter2D(0, 0).y;
+// ============================================================
+// DERIVED LAYOUT
+// ============================================================
 
-// --- Upright bottle: narrow neck (the exit path) on top, wide mouth at the bottom holding the spheres ---
-const MOUTH_WIDTH = GRID_WIDTH;
-const NECK_WIDTH = CELL_PITCH * 2.5;
-const TUBE_HEIGHT = CELL_PITCH * 30;
-const NECK_HEIGHT_FRACTION = .99;
+const gridLeftEdge = gridView.getCellCenter2D(0, 0).x - gridCellPitch / 2;
+const gridRightEdge = gridView.getCellCenter2D(0, GRID_COLS - 1).x + gridCellPitch / 2;
+const gridTopRowY = gridView.getCellCenter2D(0, 0).y;
 
-const mouthBottomY = topRowY + CELL_PITCH * 0.5;
-const neckTopY = mouthBottomY + TUBE_HEIGHT * 2;
+const mouthBottomY = gridTopRowY + TUBE_GAP_ABOVE_GRID;
+const neckTopY = mouthBottomY + TUBE_HEIGHT;
+
+// ============================================================
+// CURVED BOTTLENECK: path, width profile, walls
+// ============================================================
+
+const neckWaypoints = buildSCurveWaypoints({
+    top: new THREE.Vector2(0, neckTopY),
+    bottom: new THREE.Vector2(0, mouthBottomY),
+    swing: TUBE_CURVE_SWING,
+    waves: TUBE_CURVE_WAVES,
+    samples: TUBE_CURVE_SAMPLES,
+});
+const neckPath = new NeckPath({ waypoints: neckWaypoints });
+
+const neckProfile = createNeckProfile({
+    neckHalfWidth: NECK_HALF_WIDTH,
+    mouthHalfWidth: MOUTH_HALF_WIDTH,
+    neckFraction: NECK_FRACTION,
+});
 
 const tubeView = new TubeView({
     scene,
-    neckTopY,
-    mouthBottomY,
-    neckWidth: NECK_WIDTH,
-    mouthWidth: MOUTH_WIDTH,
-    neckHeightFraction: NECK_HEIGHT_FRACTION,
-    shoulderSegments: 8,
+    path: neckPath,
+    halfWidthAt: neckProfile,
+    segments: TUBE_SEGMENTS,
+    wallThickness: TUBE_WALL_THICKNESS,
+    renderDepth: DEPTH_TUBE_WALLS,
 });
 
-// --- Doors guarding the neck's top opening — the "path" from the original spec ---
-const doorPair = new DoorPair({
-    scene,
-    doorY: neckTopY,
-    openingWidth: NECK_WIDTH,
-});
+// const neckGate = new NeckGate({
+//     scene,
+//     path: neckPath,
+//     t: GATE_T,
+//     halfWidth: neckProfile(GATE_T),
+//     thickness: GATE_THICKNESS,
+//     color: GATE_COLOR,
+//     renderDepth: DEPTH_GATE,
+// });
 
-function syncWallColliders(): void {
-    collisionResolver.setSegments([...tubeView.colliders, ...doorPair.getColliders()]);
-}
-
+// Wall + gate colliders are both static for now (gate never opens), so this only needs to run once.
 collisionResolver.setPlanes([
-    new LineCollider(new THREE.Vector2(leftEdge, 0), new THREE.Vector2(1, 0)),
-    new LineCollider(new THREE.Vector2(rightEdge, 0), new THREE.Vector2(-1, 0)),
+    new LineCollider(new THREE.Vector2(gridLeftEdge, 0), new THREE.Vector2(1, 0)),
+    new LineCollider(new THREE.Vector2(gridRightEdge, 0), new THREE.Vector2(-1, 0)),
 ]);
-syncWallColliders();
+collisionResolver.setSegments([...tubeView.colliders]);
 
-// --- Spawn once, packed into the wide mouth just above the grid ---
-const shoulderHeight = TUBE_HEIGHT * (1 - NECK_HEIGHT_FRACTION);
-const TOTAL_SPHERES = 1000;
+// ============================================================
+// PUSHER — creeps gently forward, stopped short of the closed gate
+// ============================================================
+
+const marblePusher = new MarblePusher({
+    scene,
+    path: neckPath,
+    startT: PUSHER_START_T,
+    maxT: 1,
+    advanceSpeed: PUSHER_ADVANCE_SPEED,
+    halfWidth: neckProfile(PUSHER_START_T) - PUSHER_WALL_CLEARANCE,
+    thickness: PUSHER_THICKNESS,
+    color: PUSHER_COLOR,
+    renderDepth: DEPTH_PUSHER,
+});
+
+// Pusher's collider is mutated in place each frame; the resolver just needs the reference once.
+collisionResolver.setPushers([marblePusher.getCollider()]);
+
+// ============================================================
+// SPAWN MARBLES — packed along the whole curved tube
+// ============================================================
 
 const spawner = new SphereSpawner({
     scene,
     world: physicsWorld,
-    totalSpheres: TOTAL_SPHERES,
-    spawnMinX: -MOUTH_WIDTH / 10 + CELL_PITCH * 0.1,
-    spawnMaxX: MOUTH_WIDTH / 10 - CELL_PITCH * 0.1,
-    spawnMinY: mouthBottomY + CELL_PITCH * 0.4,
-    spawnMaxY: mouthBottomY + shoulderHeight * 100, // stays in the lower, wider part of the shoulder — avoid the narrowing upper region
-    despawnY: -CELL_PITCH * 3,
-    radius: CELL_PITCH * 0.3,
-    colors: [0xff5555, 0x55ff88, 0x5599ff, 0xffdd55],
+    totalSpheres: SPHERE_TOTAL_COUNT,
+    despawnY: -gridCellPitch * 3,
+    radius: SPHERE_RADIUS,
+    colors: SPHERE_COLORS,
+    packingFactor: SPHERE_PACKING_FACTOR,
+    jitter: SPHERE_JITTER,
+    mass: SPHERE_MASS,
+    restitution: SPHERE_RESTITUTION,
+    renderDepth: DEPTH_SPHERE_BASE,
+    renderDepthJitter: DEPTH_SPHERE_JITTER,
 });
-spawner.spawnAll();
 
-// --- Win condition: doors open in proportion to spheres cleared. ---
-// This is one reasonable reading of "win when the path is clear" — not the
-// only one. An alternative you might prefer: keep doors shut until 100%
-// cleared, then open (rather than opening gradually alongside progress).
-// Swap the fraction below for whatever rule you settle on.
-let despawnedCount = 0;
-spawner.onDespawn(() => {
-    despawnedCount++;
-});
+spawner.spawnAll([
+    {
+        kind: 'path',
+        path: neckPath,
+        halfWidthAt: neckProfile,
+        startT: PUSHER_START_T + 0.02, // stay clear of the pusher's starting position
+        endT: 1,
+    },
+]);
+
+// ============================================================
+// RESIZE + MAIN LOOP
+// ============================================================
 
 window.addEventListener('resize', () => {
     adaptiveCamera.handleResize();
@@ -152,12 +259,13 @@ function animate() {
     const deltaSeconds = Math.min((now - lastTime) / 1000, 1 / 30);
     lastTime = now;
 
+    marblePusher.update(deltaSeconds);
     spawner.update();
     physicsWorld.step(deltaSeconds);
 
-    const clearedFraction = despawnedCount / TOTAL_SPHERES;
-    doorPair.setOpenAmount(clearedFraction);
-    syncWallColliders(); // doors moved — resolver's segment list needs the updated angle
+    // TODO (win condition, not implemented yet): once neckGate's zone is
+    // clear of both spheres and the pusher (marblePusher.hasReachedLimit()
+    // relaxed alongside neckGate.setOpenAmount(1)), that's the win state.
 
     renderer.render(scene, camera);
 }

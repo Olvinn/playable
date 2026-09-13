@@ -3,12 +3,10 @@ import { PhysicsSphere } from './physics/PhysicsSphere';
 
 export interface PhysicsSphereViewOptions {
     color?: number;
-    /** Z-offset placing the sphere in front of the grid's extruded box faces. */
     renderDepth?: number;
     segments?: number;
 }
 
-/** Renders one PhysicsSphere. Physics only ever produces x/y — this is the one place a z gets attached. */
 export class PhysicsSphereView {
     readonly mesh: THREE.Mesh;
     private sphere: PhysicsSphere;
@@ -25,9 +23,14 @@ export class PhysicsSphereView {
         this.sync();
     }
 
-    /** Copies the physics sphere's 2D position onto the mesh. Call once per frame. */
     sync(): void {
         this.mesh.position.set(this.sphere.collider.center.x, this.sphere.collider.center.y, this.renderDepth);
+    }
+
+    /** Adjust this sphere's render depth after the fact — for placing it more pleasantly relative to other layers. */
+    setRenderDepth(depth: number): void {
+        this.renderDepth = depth;
+        this.sync();
     }
 
     spawn(scene: THREE.Scene): void {

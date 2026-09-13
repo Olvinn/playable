@@ -2,46 +2,43 @@
 import { PhysicsSphere } from './physics/PhysicsSphere';
 import { PhysicsWorld } from './physics/PhysicsWorld';
 import { PhysicsSphereView } from './PhysicsSphereView';
+import { NeckPath } from './NeckPath';
+
+export type SpawnRegion =
+    | { kind: 'path'; path: NeckPath; halfWidthAt: (t: number) => number; startT?: number; endT?: number }
+    | { kind: 'box'; minX: number; maxX: number; minY: number; maxY: number };
 
 export interface SphereSpawnerOptions {
     scene: THREE.Scene;
     world: PhysicsWorld;
-    /** Total number of spheres to spawn once, up front. */
+    /** Total number of spheres to spawn once, up front, across all fill regions combined. */
     totalSpheres: number;
-    spawnMinX: number;
-    spawnMaxX: number;
-    /** Bottom of the area spheres are packed into (closer to the tube's neck). */
-    spawnMinY: number;
-    /** Top of the area spheres are packed into (closer to the tube's mouth). */
-    spawnMaxY: number;
     /** Once a sphere's y drops below this, it's removed (fell through the grid, or the loss condition, depending on your design). */
     despawnY: number;
     radius: number;
     colors?: number[];
     /** Spacing between packed sphere centers, as a multiple of radius*2. >1 leaves a starting gap so spheres don't spawn touching. */
     packingFactor?: number;
-    /** Random jitter applied to each packed position, as a fraction of the spacing. 0 = perfectly uniform grid. */
+    /** Random jitter applied to each packed position, as a fraction of the spacing. 0 = perfectly uniform. */
     jitter?: number;
     mass?: number;
     restitution?: number;
+    /** Base z-depth spheres render at. */
     renderDepth?: number;
+    /** Random +/- range applied on top of renderDepth per sphere, for a layered look instead of every sphere at exactly the same depth. */
+    renderDepthJitter?: number;
 }
 
 /**
- * Spawns the full complement of spheres once, packed in a grid across the
- * tube's mouth so they start with minimal overlap (physics untangles the
- * small starting gaps naturally rather than violently resolving heavy
- * overlap). No spheres are created after this — update() only handles
- * despawning ones that fall below despawnY.
+ * Spawns the full complement of spheres once, packed across one or more
+ * fill regions (a curved NeckPath section and/or a straight box area) so
+ * they start with minimal overlap. No spheres are created after this —
+ * update() only handles despawning ones that fall below despawnY.
  */
 export class SphereSpawner {
     private scene: THREE.Scene;
     private world: PhysicsWorld;
     private totalSpheres: number;
-    private spawnMinX: number;
-    private spawnMaxX: number;
-    private spawnMinY: number;
-    private spawnMaxY: number;
     private despawnY: number;
     private radius: number;
     private colors: number[];
@@ -50,6 +47,7 @@ export class SphereSpawner {
     private mass: number;
     private restitution: number;
     private renderDepth: number;
+    private renderDepthJitter: number;
 
     private nextId = 0;
     private active: Map<number, { sphere: PhysicsSphere; view: PhysicsSphereView }> = new Map();
@@ -59,10 +57,6 @@ export class SphereSpawner {
         this.scene = options.scene;
         this.world = options.world;
         this.totalSpheres = options.totalSpheres;
-        this.spawnMinX = options.spawnMinX;
-        this.spawnMaxX = options.spawnMaxX;
-        this.spawnMinY = options.spawnMinY;
-        this.spawnMaxY = options.spawnMaxY;
         this.despawnY = options.despawnY;
         this.radius = options.radius;
         this.colors = options.colors ?? [0xffffff];
@@ -71,6 +65,7 @@ export class SphereSpawner {
         this.mass = options.mass ?? 1;
         this.restitution = options.restitution ?? 0.2;
         this.renderDepth = options.renderDepth ?? 0.5;
+        this.renderDepthJitter = options.renderDepthJitter ?? 0;
     }
 
     /** Fires right before a sphere that crossed despawnY is removed. */
@@ -78,30 +73,15 @@ export class SphereSpawner {
         this.onDespawnCb = cb;
     }
 
-    /** Spawns totalSpheres in a packed grid. Call once, after the world and colliders are ready. */
-    spawnAll(): void {
-        const spacing = this.radius * 2 * this.packingFactor;
-        const usableWidth = this.spawnMaxX - this.spawnMinX;
-        const columns = Math.max(1, Math.floor(usableWidth / spacing) + 1);
-
+    /** Fills the given regions in order until totalSpheres is reached or every region is exhausted. */
+    spawnAll(regions: SpawnRegion[]): void {
         let spawned = 0;
-        let row = 0;
-
-        while (spawned < this.totalSpheres) {
-            const y = this.spawnMinY + row * spacing;
-            if (y > this.spawnMaxY) break; // ran out of vertical room for the configured area
-
-            const rowOffset = (row % 2 === 0) ? 0 : spacing / 2; // brick-like offset so rows nest instead of stacking in straight columns
-            for (let col = 0; col < columns && spawned < this.totalSpheres; col++) {
-                const baseX = this.spawnMinX + col * spacing + rowOffset;
-                if (baseX > this.spawnMaxX) continue;
-
-                const jitterX = (Math.random() * 2 - 1) * spacing * this.jitter;
-                const jitterY = (Math.random() * 2 - 1) * spacing * this.jitter;
-                this.spawnOne(new THREE.Vector2(baseX + jitterX, y + jitterY));
-                spawned++;
-            }
-            row++;
+        for (const region of regions) {
+            if (spawned >= this.totalSpheres) break;
+            const remaining = this.totalSpheres - spawned;
+            spawned += region.kind === 'path'
+                ? this.spawnAlongPath(region, remaining)
+                : this.spawnInBox(region, remaining);
         }
     }
 
@@ -122,6 +102,62 @@ export class SphereSpawner {
         return this.active.size;
     }
 
+    private spawnAlongPath(region: Extract<SpawnRegion, { kind: 'path' }>, maxCount: number): number {
+        const spacing = this.radius * 2 * this.packingFactor;
+        const startT = region.startT ?? 0;
+        const endT = region.endT ?? 1;
+        const pathLength = region.path.length * (endT - startT);
+        const steps = Math.max(1, Math.floor(pathLength / spacing));
+
+        let spawned = 0;
+        for (let i = 0; i <= steps && spawned < maxCount; i++) {
+            const t = startT + (endT - startT) * (i / steps);
+            const point = region.path.getPoint(t);
+            const tangent = region.path.getTangent(t);
+            const normal = new THREE.Vector2(-tangent.y, tangent.x);
+            const halfWidth = region.halfWidthAt(t);
+            const lanes = Math.max(1, Math.floor((halfWidth * 2) / spacing));
+            const laneOffset = (i % 2 === 0) ? 0 : spacing / 2; // brick-like offset so lanes nest instead of stacking in straight columns
+
+            for (let lane = 0; lane < lanes && spawned < maxCount; lane++) {
+                const across = -halfWidth + this.radius + lane * spacing + laneOffset;
+                if (across > halfWidth - this.radius) continue;
+
+                const jitterAcross = (Math.random() * 2 - 1) * spacing * this.jitter;
+                const position = point.clone().addScaledVector(normal, across + jitterAcross);
+                this.spawnOne(position);
+                spawned++;
+            }
+        }
+        return spawned;
+    }
+
+    private spawnInBox(region: Extract<SpawnRegion, { kind: 'box' }>, maxCount: number): number {
+        const spacing = this.radius * 2 * this.packingFactor;
+        const usableWidth = region.maxX - region.minX;
+        const columns = Math.max(1, Math.floor(usableWidth / spacing) + 1);
+
+        let spawned = 0;
+        let row = 0;
+        while (spawned < maxCount) {
+            const y = region.minY + row * spacing;
+            if (y > region.maxY) break;
+
+            const rowOffset = (row % 2 === 0) ? 0 : spacing / 2;
+            for (let col = 0; col < columns && spawned < maxCount; col++) {
+                const baseX = region.minX + col * spacing + rowOffset;
+                if (baseX > region.maxX) continue;
+
+                const jitterX = (Math.random() * 2 - 1) * spacing * this.jitter;
+                const jitterY = (Math.random() * 2 - 1) * spacing * this.jitter;
+                this.spawnOne(new THREE.Vector2(baseX + jitterX, y + jitterY));
+                spawned++;
+            }
+            row++;
+        }
+        return spawned;
+    }
+
     private spawnOne(position: THREE.Vector2): void {
         const sphere = new PhysicsSphere({
             id: this.nextId++,
@@ -132,7 +168,8 @@ export class SphereSpawner {
         });
 
         const color = this.colors[Math.floor(Math.random() * this.colors.length)];
-        const view = new PhysicsSphereView(sphere, { color, renderDepth: this.renderDepth });
+        const depth = this.renderDepth + (Math.random() * 2 - 1) * this.renderDepthJitter;
+        const view = new PhysicsSphereView(sphere, { color, renderDepth: depth });
 
         this.world.addSphere(sphere);
         view.spawn(this.scene);

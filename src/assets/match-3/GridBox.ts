@@ -23,7 +23,7 @@ export class GridBox {
         this.highlightColor = new THREE.Color(options.highlightColor ?? 0xffffff);
         this.currentSize = options.size;
 
-        const geometry = new THREE.BoxGeometry(1, 1, 5);
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
         const material = new THREE.MeshStandardMaterial({ color: options.colors[colorIndex] });
         this.mesh = new THREE.Mesh(geometry, material);
         this.setSize(options.size);

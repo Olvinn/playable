@@ -3,6 +3,7 @@ import { PhysicsSphere } from './PhysicsSphere';
 import { SquareCollider } from './colliders/SquareCollider.ts';
 import { LineCollider } from './colliders/LineCollider.ts';
 import { SegmentCollider } from './colliders/SegmentCollider.ts';
+import { PusherCollider } from './colliders/PusherCollider.ts';
 import { SpatialGrid } from './SpatialGrid';
 
 export interface CollisionResolverOptions {
@@ -14,9 +15,11 @@ export class CollisionResolver {
     private boxGrid: SpatialGrid<SquareCollider>;
     private planes: LineCollider[] = [];
     private segments: SegmentCollider[] = [];
+    private pushers: PusherCollider[] = [];
 
     private readonly closestPointScratch = new THREE.Vector2();
     private readonly segmentClosestScratch = new THREE.Vector2();
+    private readonly pusherClosestScratch = new THREE.Vector2();
     private readonly deltaScratch = new THREE.Vector2();
 
     constructor(options: CollisionResolverOptions) {
@@ -28,9 +31,14 @@ export class CollisionResolver {
         this.planes = planes;
     }
 
-    /** Bounded wall segments (e.g. the tube's bottle-shaped walls). Small, fixed count — resolved by brute force, no spatial bucketing needed. */
+    /** Bounded wall segments (e.g. the tube's curved walls, the doors). Small, fixed count — resolved by brute force, no spatial bucketing needed. */
     setSegments(segments: SegmentCollider[]): void {
         this.segments = segments;
+    }
+
+    /** Moving paddle colliders (e.g. MarblePusher while extending). Pass [] when nothing should currently push. */
+    setPushers(pushers: PusherCollider[]): void {
+        this.pushers = pushers;
     }
 
     /** Call whenever the match-3 grid's occupied cells change (after a collapse settles). */
@@ -51,6 +59,7 @@ export class CollisionResolver {
             this.resolveAgainstPlanes(sphere);
             this.resolveAgainstSegments(sphere);
             this.resolveAgainstBoxes(sphere);
+            this.resolveAgainstPushers(sphere);
             this.resolveAgainstNeighborSpheres(sphere);
         }
     }
@@ -103,6 +112,26 @@ export class CollisionResolver {
             const penetration = radius - distance;
             sphere.collider.center.addScaledVector(normal, penetration);
             this.reflectVelocity(sphere, normal);
+        }
+    }
+
+    private resolveAgainstPushers(sphere: PhysicsSphere): void {
+        for (const pusher of this.pushers) {
+            const closest = pusher.closestPointTo(sphere.collider.center, this.pusherClosestScratch);
+            const delta = this.deltaScratch.subVectors(sphere.collider.center, closest);
+            const distanceSq = delta.lengthSq();
+            const radius = sphere.collider.radius;
+            if (distanceSq >= radius * radius) continue;
+
+            const distance = Math.sqrt(distanceSq);
+            const normal = distance > 1e-6
+                ? delta.multiplyScalar(1 / distance)
+                : new THREE.Vector2(0, 1);
+
+            const penetration = radius - distance;
+            sphere.collider.center.addScaledVector(normal, penetration);
+            this.reflectVelocity(sphere, normal);
+            sphere.velocity.add(pusher.velocity); // the pusher physically carries the sphere along with it
         }
     }
 

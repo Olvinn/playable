@@ -1,63 +1,56 @@
 ﻿import * as THREE from 'three';
 import { SegmentCollider } from './physics/colliders/SegmentCollider';
+import { NeckPath } from './NeckPath';
 
-export interface TubeOptions {
+export interface TubeViewOptions {
     scene: THREE.Scene;
-    centerX?: number;
-    /** Top of the narrow neck — this is the "path" opening the doors guard. */
-    neckTopY: number;
-    /** Bottom of the wide mouth — sits just above the grid. */
-    mouthBottomY: number;
-    neckWidth: number;
-    mouthWidth: number;
-    /** Fraction of total tube height that is the straight neck at the TOP. */
-    neckHeightFraction?: number;
-    /** Segments used to approximate the curved shoulder — more = smoother bottle silhouette. */
-    shoulderSegments?: number;
+    /** Curve running from the narrow top entrance (t=0) to the wide bottom mouth (t=1). */
+    path: NeckPath;
+    /** Half-width of the tube at each arc-length fraction — see NeckProfile.ts. */
+    halfWidthAt: (t: number) => number;
+    /** Number of straight segments used to approximate the curve — higher is smoother. */
+    segments?: number;
     wallThickness?: number;
     color?: number;
     renderDepth?: number;
 }
 
 /**
- * An upright glass-bottle shape: a narrow neck at the top (the exit path),
- * widening through a curved shoulder into a wide mouth at the bottom that
- * sits above the grid and holds the spawned spheres. Wall geometry and
- * collision segments are built from the same polyline, so what's drawn is
- * exactly what spheres bounce off.
+ * A tube whose walls follow an arbitrary curved path and whose half-width
+ * varies along it (see NeckProfile). This is what lets the neck curve
+ * while staying filled end-to-end with spheres, and it's what unifies the
+ * old separate "neck" and "mouth" shapes into one continuous tube.
+ *
+ * Wall geometry and collision segments are built from the same offset
+ * paths, so what's drawn is exactly what spheres bounce off.
  */
 export class TubeView {
-    readonly colliders: SegmentCollider[];
+    readonly leftColliders: SegmentCollider[];
+    readonly rightColliders: SegmentCollider[];
     private walls: THREE.Mesh[] = [];
     private scene: THREE.Scene;
 
-    constructor(options: TubeOptions) {
+    constructor(options: TubeViewOptions) {
         this.scene = options.scene;
-        const centerX = options.centerX ?? 0;
-        const neckHeightFraction = options.neckHeightFraction ?? 0.25;
-        const shoulderSegments = options.shoulderSegments ?? 6;
+        const segments = options.segments ?? 24;
         const thickness = options.wallThickness ?? 0.05;
         const depth = options.renderDepth ?? 0.4;
         const color = options.color ?? 0x335577;
 
-        const rightProfile = this.buildHalfWidthProfile(
-            options.neckTopY, options.mouthBottomY,
-            options.neckWidth / 2, options.mouthWidth / 2,
-            neckHeightFraction, shoulderSegments
-        ).map(p => new THREE.Vector2(centerX + p.x, p.y));
+        const { left, right } = this.buildOffsetPaths(options.path, options.halfWidthAt, segments);
 
-        const leftProfile = rightProfile.map(p => new THREE.Vector2(2 * centerX - p.x, p.y));
+        this.leftColliders = this.buildSegmentChain(left);
+        this.rightColliders = this.buildSegmentChain(right);
 
-        this.colliders = [
-            ...this.buildSegmentChain(rightProfile),
-            ...this.buildSegmentChain(leftProfile),
-        ];
-
-        const rightMaterial = new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.45, side: THREE.DoubleSide });
-        const leftMaterial = rightMaterial.clone();
-        this.walls.push(this.buildWallMesh(rightProfile, thickness, depth, rightMaterial));
-        this.walls.push(this.buildWallMesh(leftProfile, thickness, depth, leftMaterial));
+        const leftMaterial = new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.45, side: THREE.DoubleSide });
+        const rightMaterial = leftMaterial.clone();
+        this.walls.push(this.buildWallMesh(left, thickness, depth, leftMaterial));
+        this.walls.push(this.buildWallMesh(right, thickness, depth, rightMaterial));
         this.walls.forEach(wall => this.scene.add(wall));
+    }
+
+    get colliders(): SegmentCollider[] {
+        return [...this.leftColliders, ...this.rightColliders];
     }
 
     dispose(): void {
@@ -68,30 +61,23 @@ export class TubeView {
         }
     }
 
-    /** Half-width (x) at each height (y), from the neck's top down to the mouth's bottom, in local offsets from center. */
-    private buildHalfWidthProfile(
-        neckTopY: number, mouthBottomY: number,
-        neckHalfWidth: number, mouthHalfWidth: number,
-        neckHeightFraction: number, shoulderSegments: number
-    ): THREE.Vector2[] {
-        const totalHeight = neckTopY - mouthBottomY;
-        const neckHeight = totalHeight * neckHeightFraction;
-        const shoulderHeight = totalHeight - neckHeight;
-        const shoulderTopY = neckTopY - neckHeight; // bottom of the straight neck / top of the shoulder curve
+    private buildOffsetPaths(
+        path: NeckPath, halfWidthAt: (t: number) => number, segments: number
+    ): { left: THREE.Vector2[]; right: THREE.Vector2[] } {
+        const left: THREE.Vector2[] = [];
+        const right: THREE.Vector2[] = [];
 
-        const points: THREE.Vector2[] = [
-            new THREE.Vector2(neckHalfWidth, neckTopY),     // very top of the neck
-            new THREE.Vector2(neckHalfWidth, shoulderTopY), // bottom of the straight neck
-        ];
+        for (let i = 0; i <= segments; i++) {
+            const t = i / segments;
+            const point = path.getPoint(t);
+            const tangent = path.getTangent(t);
+            const normal = new THREE.Vector2(-tangent.y, tangent.x);
+            const halfWidth = halfWidthAt(t);
 
-        for (let i = 1; i <= shoulderSegments; i++) {
-            const t = i / shoulderSegments;
-            const eased = t * t * (3 - 2 * t); // smoothstep
-            const y = shoulderTopY - shoulderHeight * t;
-            const halfWidth = THREE.MathUtils.lerp(neckHalfWidth, mouthHalfWidth, eased);
-            points.push(new THREE.Vector2(halfWidth, y));
+            left.push(point.clone().addScaledVector(normal, halfWidth));
+            right.push(point.clone().addScaledVector(normal, -halfWidth));
         }
-        return points; // last point lands exactly at (mouthHalfWidth, mouthBottomY)
+        return { left, right };
     }
 
     private buildSegmentChain(points: THREE.Vector2[]): SegmentCollider[] {
