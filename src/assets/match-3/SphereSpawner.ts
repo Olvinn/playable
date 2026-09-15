@@ -165,7 +165,7 @@ export class SphereSpawner {
             radius: this.radius,
             mass: this.mass,
             restitution: this.restitution,
-        });
+        }); 
 
         const color = this.colors[Math.floor(Math.random() * this.colors.length)];
         const depth = this.renderDepth + (Math.random() * 2 - 1) * this.renderDepthJitter;

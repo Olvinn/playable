@@ -91,6 +91,7 @@ export class ThreeGridView implements IGridView {
     onCellPointerUp(cb: (cell: CellCoord) => void): void { this.pointerUpCb = cb; }
 
     highlightCell(cell: CellCoord): void {
+        this.highlighted?.setHighlighted(false);
         this.highlighted = this.boxes[cell.row][cell.col];
         this.highlighted?.setHighlighted(true);
     }

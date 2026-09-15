@@ -37,7 +37,7 @@ export class TubeView {
         const depth = options.renderDepth ?? 0.4;
         const color = options.color ?? 0x335577;
 
-        const { left, right } = this.buildOffsetPaths(options.path, options.halfWidthAt, segments);
+        const { left, right } = this.buildOffsetPaths(options.path, options.halfWidthAt, segments, thickness);
 
         this.leftColliders = this.buildSegmentChain(left);
         this.rightColliders = this.buildSegmentChain(right);
@@ -62,17 +62,29 @@ export class TubeView {
     }
 
     private buildOffsetPaths(
-        path: NeckPath, halfWidthAt: (t: number) => number, segments: number
+        path: NeckPath, halfWidthAt: (t: number) => number, segments: number, thickness: number
     ): { left: THREE.Vector2[]; right: THREE.Vector2[] } {
         const left: THREE.Vector2[] = [];
         const right: THREE.Vector2[] = [];
+
+        // The wall itself extends thickness/2 further inward from this centerline (see
+        // buildWallMesh, and the physics wall bodies built from these same points) — so placing
+        // the centerline exactly at halfWidthAt(t) would leave the wall's actual inner face
+        // thickness/2 *inside* the width everything else (SphereSpawner, the neck profile) treats
+        // as the clear passable boundary. Marbles can legitimately be packed right up to that
+        // boundary, so without this correction they'd spawn already overlapping the wall's physical
+        // thickness — a standing overlap the solver has to keep fighting, which is exactly the kind
+        // of localized, hard-to-diagnose jam this was causing. Pushing the centerline outward by
+        // thickness/2 puts the wall's real inner face exactly at halfWidthAt(t), matching what
+        // every consumer of that function already assumes.
+        const halfThickness = thickness / 2;
 
         for (let i = 0; i <= segments; i++) {
             const t = i / segments;
             const point = path.getPoint(t);
             const tangent = path.getTangent(t);
             const normal = new THREE.Vector2(-tangent.y, tangent.x);
-            const halfWidth = halfWidthAt(t);
+            const halfWidth = halfWidthAt(t) + halfThickness;
 
             left.push(point.clone().addScaledVector(normal, halfWidth));
             right.push(point.clone().addScaledVector(normal, -halfWidth));
