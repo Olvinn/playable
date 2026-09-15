@@ -13,6 +13,10 @@ export interface TubeViewOptions {
     wallThickness?: number;
     color?: number;
     renderDepth?: number;
+    /** Same ground texture used for the outer background, so the tube reads as carved from it. */
+    textureUrl?: string;
+    /** World units spanned by a single texture tile — matches GroundPlane's tiling scale. */
+    tileWorldSize?: number;
 }
 
 /**
@@ -44,9 +48,36 @@ export class TubeView {
 
         const leftMaterial = new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.45, side: THREE.DoubleSide });
         const rightMaterial = leftMaterial.clone();
-        this.walls.push(this.buildWallMesh(left, thickness, depth, leftMaterial));
-        this.walls.push(this.buildWallMesh(right, thickness, depth, rightMaterial));
+        const leftMesh = this.buildWallMesh(left, thickness, depth, leftMaterial);
+        const rightMesh = this.buildWallMesh(right, thickness, depth, rightMaterial);
+        this.walls.push(leftMesh, rightMesh);
         this.walls.forEach(wall => this.scene.add(wall));
+
+        if (options.textureUrl) {
+            const tileWorldSize = options.tileWorldSize ?? 2;
+            const loader = new THREE.TextureLoader();
+            for (const mesh of [leftMesh, rightMesh]) {
+                const material = mesh.material as THREE.MeshStandardMaterial;
+                mesh.geometry.computeBoundingBox();
+                const box = mesh.geometry.boundingBox!;
+                const repeatX = Math.max(1, (box.max.x - box.min.x) / tileWorldSize);
+                const repeatY = Math.max(1, (box.max.y - box.min.y) / tileWorldSize);
+
+                const map = loader.load(options.textureUrl);
+                map.colorSpace = THREE.SRGBColorSpace;
+                map.wrapS = THREE.RepeatWrapping;
+                map.wrapT = THREE.RepeatWrapping;
+                map.repeat.set(repeatX, repeatY);
+
+                material.map = map;
+                // Darkens the shared ground texture below the outer background's brightness — the
+                // tube reads as the same rock, just in its own shadow — while staying lighter than
+                // TubeBackdrop's near-black fill so the wall itself doesn't disappear into "inside".
+                material.color.setHex(0x8c8c8c);
+                material.opacity = 0.92;
+                material.needsUpdate = true;
+            }
+        }
     }
 
     get colliders(): SegmentCollider[] {

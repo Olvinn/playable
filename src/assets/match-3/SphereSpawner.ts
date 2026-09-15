@@ -102,6 +102,43 @@ export class SphereSpawner {
         return this.active.size;
     }
 
+    /**
+     * Removes up to `maxCount` of the active spheres whose arc-length position along `path` falls
+     * within [minT, maxT), closest to minT first — this is the actual link between playing the
+     * match-3 board and the platform being able to move at all. Without something like this, the
+     * platform's own push force is the *only* thing that determines whether/when it reaches the
+     * door, which makes the win condition entirely independent of anything the player does — not a
+     * design tradeoff, a broken game. Each successful match should call this to clear real space
+     * immediately ahead of the platform.
+     *
+     * Filtering by each sphere's own path position (not "nearest in world space" to a point) is
+     * deliberate: the serpentine tube folds back on itself, so a straight-line-nearest search could
+     * easily grab spheres from an adjacent run that's physically close by but arc-lengths away —
+     * wrong marbles entirely. Sampling findClosestT per sphere is only done here, on a match (rare,
+     * player-paced), not per frame, so the cost is a non-issue.
+     */
+    removeAheadOfPath(path: NeckPath, minT: number, maxT: number, maxCount: number): number {
+        const candidates: { id: number; t: number }[] = [];
+        for (const [id, entry] of this.active) {
+            const t = path.findClosestT(entry.sphere.collider.center);
+            if (t >= minT && t < maxT) candidates.push({ id, t });
+        }
+        candidates.sort((a, b) => a.t - b.t);
+
+        let removed = 0;
+        for (const { id } of candidates) {
+            if (removed >= maxCount) break;
+            const entry = this.active.get(id);
+            if (!entry) continue;
+            this.onDespawnCb?.(entry.sphere);
+            this.world.removeSphere(entry.sphere);
+            entry.view.destroy(this.scene);
+            this.active.delete(id);
+            removed++;
+        }
+        return removed;
+    }
+
     private spawnAlongPath(region: Extract<SpawnRegion, { kind: 'path' }>, maxCount: number): number {
         const spacing = this.radius * 2 * this.packingFactor;
         const startT = region.startT ?? 0;

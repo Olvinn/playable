@@ -106,6 +106,25 @@ export class PhysicsWorld {
     }
 
     /**
+     * Permanent static boxes (e.g. the grid's left/right boundary walls) — added once and never
+     * replaced, unlike setGridColliders/setStaticWalls which both fully rebuild their set on every
+     * call. Kept as a separate, unmanaged addition rather than folding into either of those: a
+     * grid-width boundary needs to exist only alongside the grid itself (below the tube's mouth),
+     * not for the tube's full height, or it would clip marbles mid-bend back to the grid's width
+     * regardless of how far the tube's actual (wider) serpentine swings there.
+     */
+    addStaticBoxes(colliders: SquareCollider[]): void {
+        const bodies = colliders.map(collider => Matter.Bodies.rectangle(
+            collider.center.x * MATTER_SCALE,
+            collider.center.y * MATTER_SCALE,
+            collider.halfExtents.x * 2 * MATTER_SCALE,
+            collider.halfExtents.y * 2 * MATTER_SCALE,
+            { isStatic: true, friction: 0.05, restitution: 0.1 }
+        ));
+        Matter.Composite.add(this.engine.world, bodies);
+    }
+
+    /**
      * Static bodies for the match-3 grid's currently-occupied cells — replaces the whole set each
      * call. Called every time the board changes (see main.ts's syncBoxColliders), so spheres
      * always rest on exactly the tiles still standing.

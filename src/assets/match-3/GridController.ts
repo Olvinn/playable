@@ -2,8 +2,16 @@
 import type { IGridView } from './IGridView';
 
 export interface GridControllerOptions {
-    /** Called once a swap's matches/clears/collapses have fully settled — the right time to resync anything derived from the board, e.g. physics colliders. Not called on an invalid (reverted) swap, since the board didn't change. */
+    /** Called once a swap's matches/clears/collapses have fully settled — the right time to resync anything that should only happen once per swap (e.g. the match-3/tube link). Not called on an invalid (reverted) swap, since the board didn't change. */
     onBoardChanged?: () => void;
+    /**
+     * Called right as each round of matched cells finishes its clear animation and is actually
+     * destroyed — one or more times per swap, once per cascade round, strictly before
+     * onBoardChanged. Physics colliders need this: rebuilding them only in onBoardChanged left a
+     * gap for the whole cascade's duration where a cell's box was already gone visually but its
+     * collider was still solid, so marbles rested on thin air until everything settled.
+     */
+    onCellsCleared?: () => void;
 }
 
 export class GridController {
@@ -13,11 +21,13 @@ export class GridController {
     private model: GridModel;
     private view: IGridView;
     private onBoardChanged: (() => void) | null;
+    private onCellsCleared: (() => void) | null;
 
     constructor(model: GridModel, view: IGridView, options: GridControllerOptions = {}) {
         this.model = model;
         this.view = view;
         this.onBoardChanged = options.onBoardChanged ?? null;
+        this.onCellsCleared = options.onCellsCleared ?? null;
         this.view.renderInitial(model.serialize());
         this.view.onCellPointerDown(cell => this.handlePointerDown(cell));
         this.view.onCellPointerUp(cell => this.handlePointerUp(cell));
@@ -72,6 +82,7 @@ export class GridController {
         while (current) {
             const cleared = this.model.clearMatches(current);
             await this.view.animateMatched(cleared);
+            this.onCellsCleared?.();
 
             const moves = this.model.collapse();
             await this.view.animateCollapse(moves);

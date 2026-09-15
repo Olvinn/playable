@@ -21,6 +21,10 @@ export interface PlatformCharacterOptions {
      * of your own weight" means the same thing whether the platform itself is light or heavy.
      */
     pushAcceleration?: number;
+    /** Arc-length fraction (0-1) along the path where the character "opens the door" and the game is won. Defaults to 1 (the very end of the tube). */
+    arrivalT?: number;
+    /** Fired once, the frame the character reaches arrivalT. */
+    onArrive?: () => void;
     platformColor?: number;
     characterColor?: number;
     renderDepth?: number;
@@ -107,15 +111,19 @@ export class PlatformCharacter {
     private platformMesh: THREE.Mesh;
     private characterMesh: THREE.Mesh;
     private pushAcceleration: number;
+    private arrivalT: number;
+    private onArrive: (() => void) | undefined;
     private hasArrived = false;
     // Radians/second cap on how fast the platform's physics body can rotate to track the tube's
     // curve — bounded so a sharp turn corrects gradually instead of snapping (see the class doc).
     private static readonly MAX_ANGULAR_SPEED = 3;
     private static readonly ANGULAR_GAIN = 5;
-    // Safety ceiling only — force-driven motion can otherwise accelerate indefinitely through any
-    // stretch with little resistance, which would look like the platform suddenly bolting forward.
-    // Real contact resistance from the pile is what normally keeps speed well under this.
-    private static readonly MAX_SPEED = 1.5;
+    // Hard speed ceiling — force-driven motion can otherwise accelerate indefinitely through any
+    // stretch with little resistance, or spike hard the instant a jam suddenly releases (see
+    // clampSpeed()). Lowered from 1.5 after direct feedback that the platform still looked too
+    // fast even with that cap nominally in place — this is the actual enforced ceiling now, not a
+    // rarely-hit backstop.
+    private static readonly MAX_SPEED = 0.6;
     // Bounds how fast the character marker's own position error can be corrected — independent of
     // the platform's now-variable speed (see pushTowardDoor), so the correction stays gentle even
     // when the platform itself is briefly moving fast.
@@ -125,6 +133,8 @@ export class PlatformCharacter {
         this.scene = options.scene;
         this.world = options.world;
         this.pushAcceleration = options.pushAcceleration ?? 0;
+        this.arrivalT = options.arrivalT ?? 1;
+        this.onArrive = options.onArrive;
 
         this.box = new PhysicsBox({
             position: options.position,
@@ -186,10 +196,11 @@ export class PlatformCharacter {
         // and the box has no support once it does. Freezing it here, the moment it reaches the
         // door, is what actually fixes that: locking the body static stops gravity from ever
         // being integrated for it again, so there's nothing left to fall through.
-        if (t >= 1) {
+        if (t >= this.arrivalT) {
             this.hasArrived = true;
             this.box.freeze();
             this.characterBox.freeze();
+            this.onArrive?.();
             return;
         }
 
@@ -212,15 +223,6 @@ export class PlatformCharacter {
             // this push is genuinely the only forward force there is. See the class doc for why
             // this replaced a kinematic constant-speed drive.
             this.box.applyAcceleration(tangent.clone().multiplyScalar(this.pushAcceleration));
-
-            // Safety ceiling, not the drive itself — see MAX_SPEED's own comment. Re-clamping
-            // velocity after it's already been integrated is a coarser tool than the force above,
-            // but it only ever engages when something would otherwise look unrealistically fast,
-            // e.g. a stretch of tube with little to push against.
-            if (this.box.collider.velocity.length() > PlatformCharacter.MAX_SPEED) {
-                const clamped = this.box.collider.velocity.clone().setLength(PlatformCharacter.MAX_SPEED);
-                this.box.setVelocity(clamped);
-            }
 
             // Shortest signed angular distance to the target, wrapped into [-pi, pi] — without the
             // wrap, e.g. going from 179° to -179° would compute a ~358° turn instead of the actual
@@ -258,6 +260,23 @@ export class PlatformCharacter {
     sync(): void {
         this.group.position.set(this.box.collider.center.x, this.box.collider.center.y, 0);
         this.group.rotation.z = this.box.collider.rotation;
+    }
+
+    /**
+     * Caps the platform's speed — call once per frame, right after physicsWorld.step(). This used
+     * to run inside pushTowardDoor(), which is called *before* the step, so it was only ever
+     * checking last frame's already-capped velocity before this frame's force got integrated —
+     * anywhere resistance suddenly gave way (a jam breaking), that force could add a full frame's
+     * worth of acceleration on top of an already-capped speed with nothing catching the result
+     * until a frame later. Verified directly: peak speed reached 3.4, more than double the
+     * intended 1.5 ceiling, right at the kind of sudden release that read as "a power lifter burst"
+     * rather than a steady push. Clamping immediately after the step it actually happened in closes
+     * that gap.
+     */
+    clampSpeed(): void {
+        if (this.box.collider.velocity.length() > PlatformCharacter.MAX_SPEED) {
+            this.box.setVelocity(this.box.collider.velocity.clone().setLength(PlatformCharacter.MAX_SPEED));
+        }
     }
 
     dispose(): void {

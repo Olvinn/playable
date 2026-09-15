@@ -8,6 +8,8 @@ export interface DoorOptions {
     height?: number;
     color?: number;
     renderDepth?: number;
+    /** Path to a texture (e.g. a door illustration with transparency) to use instead of a flat color. */
+    textureUrl?: string;
 }
 
 /**
@@ -30,10 +32,28 @@ export class Door {
         const depth = options.renderDepth ?? -0.2;
 
         const geometry = new THREE.PlaneGeometry(options.halfWidth * 2, height);
-        const material = new THREE.MeshBasicMaterial({ color });
+        const material = options.textureUrl
+            ? new THREE.MeshBasicMaterial({ transparent: true, alphaTest: 0.5 })
+            : new THREE.MeshBasicMaterial({ color });
         this.mesh = new THREE.Mesh(geometry, material);
         this.mesh.position.set(options.center.x, options.center.y, depth);
         this.scene.add(this.mesh);
+
+        if (options.textureUrl) {
+            const loader = new THREE.TextureLoader();
+            loader.load(options.textureUrl, (texture) => {
+                texture.colorSpace = THREE.SRGBColorSpace;
+                (material as THREE.MeshBasicMaterial).map = texture;
+                (material as THREE.MeshBasicMaterial).needsUpdate = true;
+
+                // Re-fit the plane to the texture's own aspect ratio (anchored on height) so the
+                // door art isn't stretched to match the tube's neck width — the image is square
+                // with transparent padding around the door shape, not a tight halfWidth-sized crop.
+                const aspect = texture.image.width / texture.image.height;
+                geometry.dispose();
+                this.mesh.geometry = new THREE.PlaneGeometry(height * aspect, height);
+            });
+        }
     }
 
     dispose(): void {

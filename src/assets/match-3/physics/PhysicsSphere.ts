@@ -31,8 +31,13 @@ export class PhysicsSphere {
             options.radius * MATTER_SCALE,
             {
                 restitution: options.restitution ?? 0.2,
-                friction: 0.05,
-                frictionStatic: 0.3,
+                // Low on purpose: real marbles are slick, and friction this low between spheres is
+                // also what keeps a packed pile from locking into a rigid, self-supporting arch —
+                // frictionStatic in particular is what lets grains wedge against each other and
+                // stay wedged. Too high here reads as the platform needing a "power lift" burst to
+                // break free rather than a steady, mouse-weight push sliding it along.
+                friction: 0.01,
+                frictionStatic: 0.02,
                 frictionAir: 0.01,
             }
         );

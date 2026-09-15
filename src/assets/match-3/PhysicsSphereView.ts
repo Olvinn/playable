@@ -18,7 +18,24 @@ export class PhysicsSphereView {
 
         const segments = options.segments ?? 16;
         const geometry = new THREE.SphereGeometry(sphere.collider.radius, segments, segments);
-        const material = new THREE.MeshStandardMaterial({ color: options.color ?? 0xffffff });
+        const color = options.color ?? 0xffffff;
+        const material = new THREE.MeshPhysicalMaterial({
+            color,
+            attenuationColor: color,
+            // Shorter than the sphere's own diameter so light passing through picks up a strong,
+            // saturated tint instead of reading as barely-tinted clear glass.
+            attenuationDistance: sphere.collider.radius * 0.8,
+            emissive: color,
+            emissiveIntensity: 0.25,
+            roughness: 0.05,
+            metalness: 0,
+            transmission: 0.95,
+            ior: 1.5,
+            thickness: sphere.collider.radius * 2,
+            clearcoat: 1,
+            clearcoatRoughness: 0.08,
+            envMapIntensity: 1.6,
+        });
         this.mesh = new THREE.Mesh(geometry, material);
         this.sync();
     }

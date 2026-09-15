@@ -18,6 +18,17 @@ export interface SerpentineOptions {
     bendSamples?: number;
     /** Fraction of the final level's drop spent easing back to center (bottom.x) before the last straight vertical approach. */
     mergeFraction?: number;
+    /**
+     * Fraction of one level's drop spent sloping down *within* each straight run, rather than all
+     * of it happening in the bend between runs. A perfectly horizontal run gives gravity zero
+     * pull along the direction of travel there, so anything resting on it — marbles or the
+     * platform — has no help at all sliding forward; the only force available is whatever's
+     * pushing it directly, which reads as needing to "break free" rather than settling and
+     * sliding. A gentle continuous slope means gravity always has some tangential component,
+     * everywhere on the path, not just in the bends. 0 = perfectly horizontal runs (the original
+     * behavior).
+     */
+    runSlopeFraction?: number;
 }
 
 export interface SerpentineResult {
@@ -50,15 +61,17 @@ export function buildSerpentineWaypoints(options: SerpentineOptions): Serpentine
     const { top, bottom, runs, runHalfLength, bendRadius } = options;
     const bendSamples = options.bendSamples ?? 10;
     const mergeFraction = options.mergeFraction ?? 0.5;
+    const runSlopeFraction = options.runSlopeFraction ?? 0;
     const points: THREE.Vector2[] = [];
 
     // `runs` levels between the runs, plus one more for the extra recentering hairpin.
     const totalDrop = top.y - bottom.y;
     const levelStep = totalDrop / (runs + 1);
+    const runSlope = levelStep * runSlopeFraction;
 
-    const pushBend = (endX: number, direction: number, levelY: number, nextLevelY: number): void => {
-        const midY = (levelY + nextLevelY) / 2;
-        const halfDrop = (levelY - nextLevelY) / 2;
+    const pushBend = (endX: number, direction: number, bendStartY: number, bendEndY: number): void => {
+        const midY = (bendStartY + bendEndY) / 2;
+        const halfDrop = (bendStartY - bendEndY) / 2;
         for (let s = 1; s < bendSamples; s++) {
             const theta = Math.PI / 2 - (s / bendSamples) * Math.PI; // sweeps 90deg -> -90deg, through the outward bulge at 0deg
             const x = endX + direction * bendRadius * Math.cos(theta);
@@ -75,16 +88,18 @@ export function buildSerpentineWaypoints(options: SerpentineOptions): Serpentine
         const direction = i % 2 === 0 ? 1 : -1; // alternate which side each run swings toward
         const startX = top.x - direction * runHalfLength;
         const endX = top.x + direction * runHalfLength;
+        const runEndY = levelY - runSlope; // where the run actually ends, after sloping down across its own length
 
-        // Colinear points along the run, denser near both ends than in the middle — keeps
-        // Catmull-Rom's local tangent estimate stable across the join with the tightly-packed
-        // hairpin points on either side.
+        // Colinear-in-spirit points along the run (now sloped, so not literally colinear with a
+        // horizontal line) — denser near both ends than in the middle, which keeps Catmull-Rom's
+        // local tangent estimate stable across the join with the tightly-packed hairpin points on
+        // either side.
         for (const f of RUN_POINT_FRACTIONS) {
-            points.push(new THREE.Vector2(THREE.MathUtils.lerp(startX, endX, f), levelY));
+            points.push(new THREE.Vector2(THREE.MathUtils.lerp(startX, endX, f), THREE.MathUtils.lerp(levelY, runEndY, f)));
         }
 
         const nextLevelY = top.y - (i + 1) * levelStep;
-        pushBend(endX, direction, levelY, nextLevelY);
+        pushBend(endX, direction, runEndY, nextLevelY);
 
         lastEndX = endX;
         lastLevelY = nextLevelY;

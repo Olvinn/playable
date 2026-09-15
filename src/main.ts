@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { GridModel } from './assets/match-3/GridModel';
 import { ThreeGridView } from './assets/match-3/ThreeGridView';
 import { GridController } from './assets/match-3/GridController';
@@ -6,11 +7,12 @@ import { GridGenerator } from './assets/match-3/GridGenerator';
 import { buildGridColliders } from './assets/match-3/GridColliderSync';
 import { AdaptiveCamera } from './assets/match-3/AdaptiveCamera';
 import { PhysicsWorld } from './assets/match-3/physics/PhysicsWorld';
+import { SquareCollider } from './assets/match-3/physics/colliders/SquareCollider';
 import { SphereSpawner } from './assets/match-3/SphereSpawner';
 import { TubeView } from './assets/match-3/TubeView';
 import { PlatformCharacter } from './assets/match-3/PlatformCharacter';
 import { Door } from './assets/match-3/Door';
-import { WinOverlay } from './assets/match-3/WinOverlay';
+import { GameOverlay } from './assets/match-3/GameOverlay';
 import { TubeBackdrop } from './assets/match-3/TubeBackdrop';
 import { Vignette } from './assets/match-3/Vignette';
 import { GroundPlane } from './assets/match-3/GroundPlane';
@@ -37,8 +39,8 @@ const BACKGROUND_NORMAL_SCALE = 2;
 const GROUND_WIDTH = 300; // huge and static in world space so it covers the camera frustum at any zoom, no per-frame sizing needed
 const GROUND_HEIGHT = 300;
 const DEPTH_GROUND = -50; // far enough behind everything to never compete with it, well within the camera's far clip
-const VIGNETTE_STRENGTH = 0.75;
-const VIGNETTE_INNER_RADIUS_PERCENT = 40;
+const VIGNETTE_STRENGTH = 0.88;
+const VIGNETTE_INNER_RADIUS_PERCENT = 30;
 const TUBE_BACKDROP_OPACITY = 0.7;
 const DEPTH_TUBE_BACKDROP = -0.3; // behind the marbles, so it reads as shadow rather than covering them
 
@@ -61,18 +63,23 @@ const SPHERE_RADIUS = 0.15;
 const SPHERE_TOTAL_COUNT = 6000; // deliberately exceeds the tube's packing capacity so it always spawns completely full
 const SPHERE_MASS = 1;
 const SPHERE_RESTITUTION = 0.15;
-// Loosened from 1.1 after moving to Matter.js: with the old hand-rolled solver's approximate
-// collision, a tight starting pack didn't matter much because the solver was already imprecise.
-// Matter's accurate narrow-phase resolves contacts exactly, so a tightly-packed pile settles into
-// a genuinely rigid, load-bearing arch that a modest kinematic push can't reliably clear (verified
-// directly: real, non-wall-related multi-marble jams at a fixed point, persisting for 80+
-// simulated seconds even after the platform had real clearance from the walls). A bit more
-// starting space gives the pile room to locally rearrange under the platform's push instead of
-// locking rigid.
-const SPHERE_PACKING_FACTOR = 1.3;
+// Loosened to 1.3 after moving to Matter.js (from an original 1.1) specifically to reduce
+// jamming — Matter's accurate narrow-phase resolves contacts exactly, so a tightly-packed pile
+// settles into a genuinely rigid, load-bearing arch that a modest push can't reliably clear. Pulled
+// partway back down after direct feedback that the tube looked too sparse — 1.15 is a compromise
+// between "enough marbles to look full" and "enough gaps for the pile to locally rearrange instead
+// of locking rigid"; re-verify jam reliability after changing this.
+const SPHERE_PACKING_FACTOR = 1.22;
 const SPHERE_JITTER = 0.15;
-const SPHERE_COLORS = [0xffffff];
-const MARBLE_FILL_START_T = 0.07; // leaves a gap at the very top of the tube for the platform to rest into
+const SPHERE_COLORS = [0xff5555, 0x55ff88, 0x5599ff, 0xffdd55, 0xcc66ff];
+const MARBLE_FILL_START_T = 0.05; // leaves a (smaller, after the same feedback) gap at the very top of the tube for the platform to rest into
+
+// --- Match-3 <-> tube link — matching is what actually clears a path, not the platform's own push
+// force alone. Without this, the platform reaching the door depends entirely on
+// PLATFORM_PUSH_ACCELERATION vs. the pile's resistance, which makes winning completely independent
+// of anything the player does on the board — not a difficulty tradeoff, a broken win condition. ---
+const MARBLES_CLEARED_PER_MATCH = 20; // removed from the tube on every successful swap, regardless of how many tiles cascaded
+const MATCH_CLEAR_AHEAD_RANGE = 0.12; // arc-length fraction ahead of the platform's current position that a match reaches into
 
 // --- Bottleneck (neck = narrow winding path, mouth = wide bottom pool) ---
 const NECK_HALF_WIDTH = 0.6;        // wide enough for two marbles abreast, not so wide the tube's own footprint outgrows the grid it sits on
@@ -97,21 +104,26 @@ const SERPENTINE_RUN_HALF_LENGTH = 0.9;
 const SERPENTINE_BEND_RADIUS = 1.1; // must clear NECK_HALF_WIDTH or the turn's inner wall pinches shut
 const SERPENTINE_BEND_SAMPLES = 10;
 const SERPENTINE_MERGE_FRACTION = 0.5;
+// Tried at 0.2 and 0.08 (a perfectly horizontal run gives gravity zero pull along the direction of
+// travel, which was the original motivation) but reverted to 0: *any* slope, even small, distorts
+// the Catmull-Rom curve fit at the very start of the path into a real curvature spike (confirmed
+// directly — the tangent's angle swings noticeably across a short span there), which pinches the
+// tube tight enough to wall-jam anything wider than about 0.5 half-width. Since neither friction
+// nor slope turned out to be what was actually blocking progress (verified: zero friction changed
+// nothing; PLATFORM_PUSH_ACCELERATION is what needed tuning), this wasn't worth the width it cost.
+const SERPENTINE_RUN_SLOPE_FRACTION = 0;
 
 // --- Rescue platform + character (a box for now) ---
 const PLATFORM_START_T = 0.02; // starts right at the top of the tube, on top of the fully-packed pile
-// The platform's physics body now rotates to track the tube's local direction (see
+// The platform's physics body rotates to track the tube's local direction (see
 // PlatformCharacter's bounded setAngularVelocity() correction), which is what makes a wider
 // platform possible at all: a fixed-orientation box can't go around *any* curve, however gentle,
 // without a corner catching the wall the instant the corridor's direction rotates away from its
-// fixed edges. This is a real, verified improvement over matching the tube's own width (0.6),
-// which still hit a hard stall in testing, and a meaningful increase over the previous 0.33 — but
-// be aware it isn't a complete fix: under heavy local marble load the *rotational* degree of
-// freedom can get arrested the same way straight-line motion once did (contact resolution can
-// cancel a commanded angular velocity to exactly zero, mid-turn), so an occasional long pause
-// while rounding the tightest bends is still possible. Reducing this value trades some visual
-// width back for a lower chance of hitting that.
-const PLATFORM_HALF_WIDTH = 0.5;
+// fixed edges. Widened from 0.5 (was letting marbles slip past the sides) back up toward the
+// tube's own half-width (0.6) — 0.58 was the widest that held up reliably across repeated fresh
+// runs; the exact 0.6 (zero clearance) still hit a hard stall in testing. Also turned out to be
+// sensitive to SERPENTINE_RUN_SLOPE_FRACTION — see that constant's own comment.
+const PLATFORM_HALF_WIDTH = 0.58;
 const PLATFORM_HALF_THICKNESS = 0.05;
 // A realistic weight for a small plank + person, not the 100x-a-marble value this used to be —
 // that was tuned specifically to muscle through a stubborn bottleneck near the mouth, at the cost
@@ -121,33 +133,46 @@ const PLATFORM_HALF_THICKNESS = 0.05;
 const PLATFORM_MASS = 10;
 const PLATFORM_RESTITUTION = 0.05;
 // A genuine force now (see PhysicsBox.applyAcceleration and PlatformCharacter.pushTowardDoor), not
-// a kinematic speed the platform simply teleported to every frame regardless of resistance —
-// that's what made it feel like it was pushing too hard, since "reach this speed no matter what's
-// in the way" isn't how a person pushing something actually works. Expressed directly as a
-// multiple of gravity rather than an arbitrary world-units/s² figure, because applyAcceleration()
-// turns that into `mass * acceleration` automatically — so 1.0 here really does mean "the character
-// pushes with a force equal to their own (and the platform's) combined weight," independent of
-// whatever PLATFORM_MASS happens to be — the most literal reading of "only pushes with its own
-// weight." On a vertical run gravity itself (applied to every body already) adds to this along the
-// same direction; on a horizontal run this is genuinely the only forward force there is.
+// a kinematic speed the platform simply teleported to every frame regardless of resistance — that
+// mechanism, not the raw magnitude, is what made the old version feel like it was pushing too
+// hard: "reach this speed no matter what's in the way" doesn't look like a person pushing
+// something, regardless of how strong that person is. Expressed as a multiple of gravity rather
+// than an arbitrary world-units/s² figure because applyAcceleration() turns that into `mass *
+// acceleration` automatically, independent of whatever PLATFORM_MASS happens to be.
 //
-// Tested 0.3g through 2g directly: below ~1g it can stall completely and immediately, at the very
-// top of the tube where packing is densest. Above 1g, more force stopped helping — 1g and 2g hit
-// the exact same wall partway through and neither could push past it. That's a real, physical
-// granular arch (marbles bridging into a self-supporting structure, the same way sand can jam in
-// an hourglass neck), not an undersized force — no amount of straight-ahead push breaks an arch
-// like that; it needs to be disturbed some other way. So this value is chosen as "the most force
-// that's still just their own weight, and no more, since more doesn't reliably help anyway" — not
-// a guarantee the platform can never stall. It can, on a badly-arched pile. That's the honest
-// tradeoff of a physically real push replacing the old artificially strong one.
-const PLATFORM_PUSH_ACCELERATION = 1.0 * PHYSICS_GRAVITY;
+// 1.0 (literally "their own combined weight, no more") was tried first and stalled solid at the
+// very top of the tube on nearly every run — verified directly with friction zeroed out on every
+// body, which made no difference at all, proving that particular jam is a pure compressive-load
+// (normal-force) blockage, not a friction/arch effect more force can't fix. 4.0g reliably broke
+// through it. Brought back down to 3.5g ("less powerful," per direct feedback that 4.0g still felt
+// too strong) after widening the platform to 0.58 — the extra width needs a bit more force to clear
+// the same early jam, so this is the lowest value that still held up across repeated fresh runs at
+// the current width. Still a real force integrated against real resistance, not an unconditional
+// fixed speed — that mechanism, not the raw multiplier, is what "pushing too hard" was actually
+// describing.
+const PLATFORM_PUSH_ACCELERATION = 3.5 * PHYSICS_GRAVITY;
 const PLATFORM_COLOR = 0x8899aa;
 const CHARACTER_SIZE = 0.3;
 const CHARACTER_COLOR = 0xff4477;
 
-// --- Door (purely visual — no collider; win is "marble count reaches zero", see animate()) ---
+// --- Door (still no collider — nothing physically stops marbles or the platform going past it —
+// but reaching it is now the actual win condition, via PlatformCharacter's arrivalT/onArrive, not
+// "every marble drained." That also sidesteps the tube's single worst spot: the natural congestion
+// where the tight neck opens into the wide mouth, which earlier testing found could stall the
+// platform for a very long time even under otherwise-reliable settings. ---
+// Past the point where PLATFORM_PUSH_ACCELERATION alone can reliably get, on purpose. Pure physics
+// (no matches at all) plateaus around t=0.58-0.6 against a genuine granular arch that more force
+// doesn't fix without also breaking the "gentle push" feel (verified: even 20g just blows through
+// in a few seconds instead of stalling, which is exactly as disconnected from play as never
+// reaching it at all). The gap between there and here is meant to be closed by
+// SphereSpawner.removeAheadOfPath, called from onBoardChanged on every successful match — reaching
+// this now requires actually clearing marbles via the board, not just letting the platform sit.
+const DOOR_T = 0.85;
 const DOOR_HEIGHT = 0.8;
 const DOOR_COLOR = 0xd9a441;
+
+// --- Timer (lose condition: run out before reaching the door) ---
+const TIME_LIMIT_SECONDS = 30;
 
 // --- Render depths ---
 const DEPTH_TUBE_WALLS = 0.4;
@@ -169,6 +194,12 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 document.getElementById('app')!.appendChild(renderer.domElement);
+
+// Gives the glass marbles' transmission/clearcoat something to reflect — without this, glass
+// materials with no scene.environment render flat and dark since there's nothing to catch.
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+pmremGenerator.dispose();
 
 new Vignette({ strength: VIGNETTE_STRENGTH, innerRadiusPercent: VIGNETTE_INNER_RADIUS_PERCENT });
 
@@ -195,6 +226,7 @@ const gridView = new ThreeGridView({
 
 const gridWidth = GRID_COLS * GRID_CELL_SIZE + (GRID_COLS - 1) * GRID_CELL_GAP;
 const gridCellPitch = GRID_CELL_SIZE + GRID_CELL_GAP;
+const spawnerDespawnY = -gridCellPitch * 3;
 
 // The camera is fit to the grid — that's what needs to stay large enough to tap on mobile. The
 // serpentine is sized to fit inside that same width (see SERPENTINE_* above); this max() is just
@@ -226,8 +258,9 @@ function syncBoxColliders(): void {
     physicsWorld.setGridColliders(buildGridColliders(gridModel, gridView));
 }
 
-new GridController(gridModel, gridView, { onBoardChanged: syncBoxColliders });
 syncBoxColliders();
+// GridController itself is created further down, once spawner/platformCharacter/neckPath exist —
+// see the comment there for why matching needs to reach into the tube, not just the grid.
 
 // ============================================================
 // DERIVED LAYOUT
@@ -262,6 +295,7 @@ const { waypoints: neckWaypoints, straightApproachStart } = buildSerpentineWaypo
     bendRadius: SERPENTINE_BEND_RADIUS,
     bendSamples: SERPENTINE_BEND_SAMPLES,
     mergeFraction: SERPENTINE_MERGE_FRACTION,
+    runSlopeFraction: SERPENTINE_RUN_SLOPE_FRACTION,
 });
 const neckPath = new NeckPath({ waypoints: neckWaypoints });
 
@@ -283,6 +317,8 @@ const tubeView = new TubeView({
     segments: TUBE_SEGMENTS,
     wallThickness: TUBE_WALL_THICKNESS,
     renderDepth: DEPTH_TUBE_WALLS,
+    textureUrl: BACKGROUND_TEXTURE_URL,
+    tileWorldSize: BACKGROUND_TILE_WORLD_SIZE,
 });
 
 new TubeBackdrop({
@@ -311,6 +347,27 @@ new TubeBackdrop({
 // teleporting marbles out of the tube into empty space instead of containing them.
 physicsWorld.setStaticWalls([tubeView.leftColliders, tubeView.rightColliders], TUBE_WALL_THICKNESS);
 
+// Grid boundary walls: scoped to start exactly where the tube's own walls stop (the mouth, at
+// mouthBottomY), so they don't fight the comment above — nothing here reaches up into the tube's
+// bends. Below the mouth there was previously no side containment at all, so marbles that spilled
+// past the outer columns once the pile settled onto the grid just rolled off the edge into open
+// space instead of staying on the board.
+const GRID_SIDE_WALL_THICKNESS = 0.3;
+const gridSideWallHeight = mouthBottomY - spawnerDespawnY;
+const gridSideWallCenterY = (mouthBottomY + spawnerDespawnY) / 2;
+physicsWorld.addStaticBoxes([
+    new SquareCollider(
+        new THREE.Vector2(-gridWidth / 2 - GRID_SIDE_WALL_THICKNESS / 2, gridSideWallCenterY),
+        new THREE.Vector2(GRID_SIDE_WALL_THICKNESS / 2, gridSideWallHeight / 2),
+        'grid-wall-left'
+    ),
+    new SquareCollider(
+        new THREE.Vector2(gridWidth / 2 + GRID_SIDE_WALL_THICKNESS / 2, gridSideWallCenterY),
+        new THREE.Vector2(GRID_SIDE_WALL_THICKNESS / 2, gridSideWallHeight / 2),
+        'grid-wall-right'
+    ),
+]);
+
 // ============================================================
 // SPAWN MARBLES — packed along the whole tube
 // ============================================================
@@ -319,7 +376,7 @@ const spawner = new SphereSpawner({
     scene,
     world: physicsWorld,
     totalSpheres: SPHERE_TOTAL_COUNT,
-    despawnY: -gridCellPitch * 3,
+    despawnY: spawnerDespawnY,
     radius: SPHERE_RADIUS,
     colors: SPHERE_COLORS,
     packingFactor: SPHERE_PACKING_FACTOR,
@@ -330,19 +387,37 @@ const spawner = new SphereSpawner({
     renderDepthJitter: DEPTH_SPHERE_JITTER,
 });
 
+// The tube's own bottom (t=1, mouthBottomY) sits only TUBE_GAP_ABOVE_GRID above the grid's
+// *center*, which is less than the grid cell's own half-size — so packing marbles all the way to
+// t=1 (as a naive endT:1 would) spawns the bottom-most ones already overlapping the top row's
+// collider, before physics ever gets a step to separate them. Stop the fill far enough above the
+// grid's real top surface (matching GridColliderSync's collider sizing) that a full marble radius
+// plus a small margin clears it, and let gravity settle that last short gap naturally instead.
+const gridTopSurfaceY = gridTopRowY + (GRID_CELL_SIZE + GRID_CELL_GAP) / 2 + 0.01;
+const marbleFillEndY = gridTopSurfaceY + SPHERE_RADIUS + 0.05;
+const marbleFillEndT = neckPath.findClosestT(new THREE.Vector2(0, marbleFillEndY));
+
 spawner.spawnAll([
     {
         kind: 'path',
         path: neckPath,
         halfWidthAt: neckProfile,
         startT: MARBLE_FILL_START_T,
-        endT: 1,
+        endT: marbleFillEndT,
     },
 ]);
 
 // ============================================================
 // RESCUE PLATFORM + CHARACTER — starts resting on top of the full pile
 // ============================================================
+
+// Set once, by whichever of win/lose fires first — guards against the timer expiring the same
+// frame the door's reached, or either firing twice.
+let gameEnded = false;
+
+const gameOverlay = new GameOverlay({
+    onRestart: () => window.location.reload(),
+});
 
 const platformCharacter = new PlatformCharacter({
     scene,
@@ -354,26 +429,48 @@ const platformCharacter = new PlatformCharacter({
     mass: PLATFORM_MASS,
     restitution: PLATFORM_RESTITUTION,
     pushAcceleration: PLATFORM_PUSH_ACCELERATION,
+    arrivalT: DOOR_T,
+    onArrive: () => {
+        if (gameEnded) return;
+        gameEnded = true;
+        gameOverlay.showWin();
+    },
     platformColor: PLATFORM_COLOR,
     characterColor: CHARACTER_COLOR,
     renderDepth: DEPTH_PLATFORM,
 });
 
 // ============================================================
-// DOOR — the win target, sitting right where the tube meets the grid
+// DOOR — the win target, partway up the tube (see DOOR_T)
 // ============================================================
 
 new Door({
     scene,
-    center: new THREE.Vector2(0, mouthBottomY),
-    halfWidth: neckProfile(1),
+    center: neckPath.getPoint(DOOR_T),
+    halfWidth: neckProfile(DOOR_T),
     height: DOOR_HEIGHT,
     color: DOOR_COLOR,
     renderDepth: DEPTH_DOOR,
+    textureUrl: '/textures/door.png',
 });
 
-const winOverlay = new WinOverlay();
-let hasWon = false;
+// ============================================================
+// MATCH-3 <-> TUBE LINK
+// ============================================================
+
+// The one place a successful match actually does something to the pile: it clears real marbles
+// from the tube immediately ahead of the platform, not just recomputes grid colliders. This is
+// what makes reaching the door depend on playing the board — before this, PLATFORM_PUSH_ACCELERATION
+// vs. the pile's own resistance was the *only* thing deciding the outcome, so a player who never
+// touched the grid would win exactly as often as one who played it perfectly.
+function onBoardChanged(): void {
+    syncBoxColliders();
+
+    const platformT = neckPath.findClosestT(platformCharacter.box.collider.center);
+    spawner.removeAheadOfPath(neckPath, platformT, Math.min(platformT + MATCH_CLEAR_AHEAD_RANGE, 1), MARBLES_CLEARED_PER_MATCH);
+}
+
+new GridController(gridModel, gridView, { onBoardChanged, onCellsCleared: syncBoxColliders });
 
 // ============================================================
 // RESIZE + MAIN LOOP
@@ -384,6 +481,8 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+let elapsedSeconds = 0;
+
 let lastTime = performance.now();
 function animate() {
     requestAnimationFrame(animate);
@@ -391,18 +490,22 @@ function animate() {
     const deltaSeconds = Math.min((now - lastTime) / 1000, 1 / 30);
     lastTime = now;
 
-    spawner.update();
-    platformCharacter.pushTowardDoor(neckPath, deltaSeconds);
-    platformCharacter.sync();
-    physicsWorld.step(deltaSeconds);
+    if (!gameEnded) {
+        spawner.update();
+        platformCharacter.pushTowardDoor(neckPath, deltaSeconds);
+        platformCharacter.sync();
+        physicsWorld.step(deltaSeconds);
+        platformCharacter.clampSpeed();
 
-    if (!hasWon && spawner.getActiveCount() === 0) {
-        hasWon = true;
-        winOverlay.show();
+        elapsedSeconds += deltaSeconds;
+        const remainingSeconds = TIME_LIMIT_SECONDS - elapsedSeconds;
+        gameOverlay.updateTimer(elapsedSeconds / TIME_LIMIT_SECONDS, remainingSeconds);
+
+        if (remainingSeconds <= 0) {
+            gameEnded = true;
+            gameOverlay.showLose();
+        }
     }
-
-    // TODO (lose, not implemented yet): a timer counting down to a loss if
-    // the platform hasn't reached the door in time.
 
     renderer.render(scene, camera);
 }

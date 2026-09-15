@@ -30,8 +30,11 @@ export class PhysicsBox {
             options.halfExtents.y * 2 * MATTER_SCALE,
             {
                 restitution: options.restitution ?? 0.2,
-                friction: 0.05,
-                frictionStatic: 0.2,
+                // Low for the same reason as PhysicsSphere's — a high-friction platform surface
+                // compounds with high-friction marbles to make a small, steady push feel like it
+                // needs to "break free" with a sudden burst rather than sliding smoothly.
+                friction: 0.02,
+                frictionStatic: 0.05,
                 frictionAir: 0.01,
             }
         );
