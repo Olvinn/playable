@@ -28,7 +28,6 @@ export class GridGenerator {
         return grid;
     }
 
-    /** True if any adjacent swap on this grid would create a match. */
     hasValidMove(grid: CellValue[][]): boolean {
         for (let r = 0; r < this.rows; r++) {
             for (let c = 0; c < this.cols; c++) {

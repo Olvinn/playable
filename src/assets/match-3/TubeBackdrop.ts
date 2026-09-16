@@ -3,9 +3,7 @@ import { NeckPath } from './NeckPath';
 
 export interface TubeBackdropOptions {
     scene: THREE.Scene;
-    /** Curve running from the tube's top entrance to its bottom mouth — same path TubeView draws walls along. */
     path: NeckPath;
-    /** Half-width of the tube at each arc-length fraction — see NeckProfile.ts. */
     halfWidthAt: (t: number) => number;
     segments?: number;
     color?: number;
@@ -13,12 +11,6 @@ export interface TubeBackdropOptions {
     renderDepth?: number;
 }
 
-/**
- * A dark, semi-transparent fill spanning the full width between the tube's
- * walls, sitting behind the marbles. The background texture still shows
- * through it, just dimmed — reads as the tube's interior being in shadow,
- * distinct from the lit ground outside it.
- */
 export class TubeBackdrop {
     private scene: THREE.Scene;
     private mesh: THREE.Mesh;

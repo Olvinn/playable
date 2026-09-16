@@ -5,17 +5,9 @@ export interface PusherColliderOptions {
     halfExtents: THREE.Vector2;
 }
 
-/**
- * A box collider whose center moves every frame (unlike SquareCollider,
- * which represents static grid cells). When a sphere overlaps it, the
- * resolver imparts this collider's velocity onto the sphere in addition to
- * the usual position correction — that's what makes it "push" rather than
- * just "block".
- */
 export class PusherCollider {
     center: THREE.Vector2;
     halfExtents: THREE.Vector2;
-    /** Set every frame by whoever drives this pusher, based on how far its center moved this step. */
     velocity: THREE.Vector2 = new THREE.Vector2();
 
     constructor(options: PusherColliderOptions) {

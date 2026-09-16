@@ -1,11 +1,8 @@
 export interface VignetteOptions {
-    /** How dark the corners get, 0-1. */
     strength?: number;
-    /** Percent of the way to the edge where darkening starts. */
     innerRadiusPercent?: number;
 }
 
-/** A static full-screen radial darkening overlay — purely cosmetic, sits above the canvas. */
 export class Vignette {
     private element: HTMLDivElement;
 

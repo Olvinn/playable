@@ -1,14 +1,7 @@
 export interface GameOverlayOptions {
-    /** Called when the player clicks "Try Again" on either the win or lose panel. */
     onRestart: () => void;
 }
 
-/**
- * Everything drawn on top of the WebGL canvas for game state: just the win/lose panels (hidden
- * until the game ends). Plain DOM, same approach as Vignette before it — no need to route any of
- * this through Three.js. The chasing wall (see ChaserPlatform) is itself the "how much time is
- * left" signal now, rendered in the scene — no separate countdown UI needed alongside it.
- */
 export class GameOverlay {
     private winPanel: HTMLDivElement;
     private losePanel: HTMLDivElement;

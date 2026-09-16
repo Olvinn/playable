@@ -5,27 +5,13 @@ import { NeckPath } from './NeckPath';
 export interface NeckGateOptions {
     scene: THREE.Scene;
     path: NeckPath;
-    /** Arc-length fraction (0-1) along the path where this gate sits. */
     t: number;
-    /** Half-width of the tube at this point — the gate spans the full width. */
     halfWidth: number;
     thickness?: number;
     color?: number;
     renderDepth?: number;
 }
 
-/**
- * A two-leaf door hinged at the tube walls at a given point along a curved
- * path, oriented from the path's tangent/normal there so it sits flush
- * across the tube regardless of the curve's local direction at that point.
- * Swings from closed (leaves meeting at the tube's center, blocking it) to
- * open (leaves flush against the walls) as openAmount goes 0 -> 1.
- *
- * This only provides the physical gate and the API to open it later.
- * Nothing currently calls setOpenAmount — the win-condition check (clear
- * of both marbles and the pusher at this point) is intentionally not
- * wired up yet.
- */
 export class NeckGate {
     private scene: THREE.Scene;
     private hingeA: THREE.Vector2;
@@ -52,13 +38,11 @@ export class NeckGate {
         this.hingeA = center.clone().addScaledVector(normal, options.halfWidth);
         this.hingeB = center.clone().addScaledVector(normal, -options.halfWidth);
 
-        // Closed: each leaf points from its hinge toward the tube's center.
         const dirClosedA = normal.clone().negate();
         const dirClosedB = normal.clone();
         this.angleClosedA = Math.atan2(dirClosedA.y, dirClosedA.x);
         this.angleClosedB = Math.atan2(dirClosedB.y, dirClosedB.x);
 
-        // Open: both leaves swing to point back up the path (away from the mouth), flush against the walls.
         const openDir = tangent.clone().negate();
         this.angleOpen = Math.atan2(openDir.y, openDir.x);
 
@@ -67,7 +51,7 @@ export class NeckGate {
         const color = options.color ?? 0xd9a441;
 
         const geometry = new THREE.BoxGeometry(this.leafLength, thickness, depth);
-        geometry.translate(this.leafLength / 2, 0, 0); // local origin at the hinge edge
+        geometry.translate(this.leafLength / 2, 0, 0);
 
         const materialA = new THREE.MeshStandardMaterial({ color });
         const materialB = materialA.clone();
@@ -88,7 +72,6 @@ export class NeckGate {
         this.applyOpenAmount();
     }
 
-    /** 0 = fully closed (leaves meet at the tube's center), 1 = fully open (leaves flush against the walls). */
     setOpenAmount(amount: number): void {
         this.openAmount = THREE.MathUtils.clamp(amount, 0, 1);
         this.applyOpenAmount();
@@ -102,7 +85,6 @@ export class NeckGate {
         return this.openAmount >= 0.999;
     }
 
-    /** Current collider segments, reflecting the doors' present angle. */
     getColliders(): SegmentCollider[] {
         const angleA = this.lerpAngle(this.angleClosedA, this.angleOpen, this.openAmount);
         const angleB = this.lerpAngle(this.angleClosedB, this.angleOpen, this.openAmount);
@@ -121,7 +103,6 @@ export class NeckGate {
         this.leafGroupB.rotation.z = this.lerpAngle(this.angleClosedB, this.angleOpen, this.openAmount);
     }
 
-    /** Interpolates between two angles along the shorter direction, avoiding a wraparound flip near +/-PI. */
     private lerpAngle(a: number, b: number, t: number): number {
         let diff = ((b - a + Math.PI) % (2 * Math.PI)) - Math.PI;
         if (diff < -Math.PI) diff += 2 * Math.PI;

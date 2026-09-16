@@ -1,4 +1,4 @@
-﻿export type CellValue = number; // -1 = empty
+﻿export type CellValue = number;
 
 export class CellCoord {
     row: number;

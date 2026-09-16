@@ -2,25 +2,14 @@ import * as THREE from 'three';
 
 export interface DoorOptions {
     scene: THREE.Scene;
-    /** World position of the door's center. */
     center: THREE.Vector2;
     halfWidth: number;
     height?: number;
     color?: number;
     renderDepth?: number;
-    /** Path to a texture (e.g. a door illustration with transparency) to use instead of a flat color. */
     textureUrl?: string;
 }
 
-/**
- * Purely a visual marker for where the rescue platform is headed — a flat
- * panel with no collider, sitting behind the marbles in the tube's backdrop
- * layer (in front of TubeBackdrop's dark fill, behind the marbles
- * themselves). It doesn't stop anything physically: the marbles piled in
- * front of it are what obstruct the platform, and once they're gone this
- * becomes visible. See main.ts for the actual win check (marble count hits
- * zero).
- */
 export class Door {
     private scene: THREE.Scene;
     private mesh: THREE.Mesh;
@@ -46,9 +35,6 @@ export class Door {
                 (material as THREE.MeshBasicMaterial).map = texture;
                 (material as THREE.MeshBasicMaterial).needsUpdate = true;
 
-                // Re-fit the plane to the texture's own aspect ratio (anchored on height) so the
-                // door art isn't stretched to match the tube's neck width — the image is square
-                // with transparent padding around the door shape, not a tight halfWidth-sized crop.
                 const aspect = texture.image.width / texture.image.height;
                 geometry.dispose();
                 this.mesh.geometry = new THREE.PlaneGeometry(height * aspect, height);

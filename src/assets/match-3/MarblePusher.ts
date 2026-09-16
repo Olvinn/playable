@@ -5,11 +5,8 @@ import { PusherCollider } from './physics/colliders/PusherCollider';
 export interface MarblePusherOptions {
     scene: THREE.Scene;
     path: NeckPath;
-    /** Arc-length fraction (0-1) where the pusher starts. */
     startT: number;
-    /** Arc-length fraction (0-1) the pusher will not advance past — e.g. a closed gate further down the path. */
     maxT: number;
-    /** How fast the pusher advances, in arc-length fraction per second. Small = gentle. */
     advanceSpeed: number;
     halfWidth: number;
     thickness: number;
@@ -17,17 +14,6 @@ export interface MarblePusherOptions {
     renderDepth?: number;
 }
 
-/**
- * A paddle that creeps forward continuously and slowly along the neck's
- * curve — no extend/retract cycle, it simply never reverses. Physically
- * pushes any spheres in front of it (see CollisionResolver's pusher
- * handling) via the velocity it reports each frame.
- *
- * Clamped to maxT so it can't advance past a closed NeckGate — this is a
- * simplification appropriate for a kinematic (not physically-simulated)
- * actor. If a win condition later opens that gate, maxT needs to be
- * relaxed too, or the pusher will stay stuck at the old limit.
- */
 export class MarblePusher {
     private path: NeckPath;
     private t: number;
@@ -73,7 +59,6 @@ export class MarblePusher {
         this.syncMesh(center, tangent);
     }
 
-    /** Always collidable — with no retract phase, the pusher never needs to "pass through" without pushing. */
     getCollider(): PusherCollider {
         return this.collider;
     }

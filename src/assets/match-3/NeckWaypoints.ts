@@ -3,14 +3,11 @@
 export interface SCurveOptions {
     top: THREE.Vector2;
     bottom: THREE.Vector2;
-    /** How far the curve swings horizontally as it descends. */
     swing: number;
-    /** Number of left-right oscillations between top and bottom. */
     waves: number;
     samples?: number;
 }
 
-/** Waypoints for a gentle winding S-curve between two points — gives the bottleneck a curved, snake-like path instead of a straight line. */
 export function buildSCurveWaypoints(options: SCurveOptions): THREE.Vector2[] {
     const samples = options.samples ?? 8;
     const points: THREE.Vector2[] = [];

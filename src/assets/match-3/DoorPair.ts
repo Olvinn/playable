@@ -4,24 +4,13 @@ import { SegmentCollider } from './physics/colliders/SegmentCollider';
 export interface DoorPairOptions {
     scene: THREE.Scene;
     centerX?: number;
-    /** Height (world Y) the doors sit at — typically the neck's top opening. */
     doorY: number;
-    /** Full width of the opening the two doors close across. Each leaf spans half this width. */
     openingWidth: number;
     thickness?: number;
     color?: number;
     renderDepth?: number;
 }
 
-/**
- * Two door leaves hinged at the outer edges of an opening, swinging from
- * horizontal (closed, meeting at the opening's center) to vertical (open,
- * flush against the opening's walls) as openAmount goes 0 -> 1.
- *
- * Physically represented as two SegmentColliders that rotate along with the
- * visual leaves — spheres actually bounce off closed doors, and the path
- * is genuinely clear once open, not just visually hidden.
- */
 export class DoorPair {
     private scene: THREE.Scene;
     private hingeLeft: THREE.Vector2;
@@ -33,7 +22,7 @@ export class DoorPair {
     private leftMesh: THREE.Mesh;
     private rightMesh: THREE.Mesh;
 
-    private openAmount = 0; // 0 = closed, 1 = fully open
+    private openAmount = 0;
 
     constructor(options: DoorPairOptions) {
         this.scene = options.scene;
@@ -46,7 +35,6 @@ export class DoorPair {
         this.hingeLeft = new THREE.Vector2(centerX - this.leafLength, options.doorY);
         this.hingeRight = new THREE.Vector2(centerX + this.leafLength, options.doorY);
 
-        // Local origin sits at the hinge edge; the leaf extends along local +x.
         const geometry = new THREE.BoxGeometry(this.leafLength, thickness, depth);
         geometry.translate(this.leafLength / 2, 0, 0);
 
@@ -69,7 +57,6 @@ export class DoorPair {
         this.applyOpenAmount();
     }
 
-    /** 0 = fully closed (leaves meet at the opening's center), 1 = fully open (leaves flush against the walls). */
     setOpenAmount(amount: number): void {
         this.openAmount = THREE.MathUtils.clamp(amount, 0, 1);
         this.applyOpenAmount();
@@ -83,7 +70,6 @@ export class DoorPair {
         return this.openAmount >= 0.999;
     }
 
-    /** Current collider segments, reflecting the doors' present angle. Pass into CollisionResolver.setSegments() alongside any other wall segments, since setSegments replaces the whole list. */
     getColliders(): SegmentCollider[] {
         const angle = this.openAmount * (Math.PI / 2);
 
@@ -102,8 +88,8 @@ export class DoorPair {
 
     private applyOpenAmount(): void {
         const angle = this.openAmount * (Math.PI / 2);
-        this.leftGroup.rotation.z = angle;        // sweeps local +x from pointing at center (closed) to pointing up (open)
-        this.rightGroup.rotation.z = Math.PI - angle; // mirrored: pointing at center (closed) to pointing up (open)
+        this.leftGroup.rotation.z = angle;
+        this.rightGroup.rotation.z = Math.PI - angle;
     }
 
     dispose(): void {

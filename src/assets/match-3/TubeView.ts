@@ -4,30 +4,16 @@ import { NeckPath } from './NeckPath';
 
 export interface TubeViewOptions {
     scene: THREE.Scene;
-    /** Curve running from the narrow top entrance (t=0) to the wide bottom mouth (t=1). */
     path: NeckPath;
-    /** Half-width of the tube at each arc-length fraction — see NeckProfile.ts. */
     halfWidthAt: (t: number) => number;
-    /** Number of straight segments used to approximate the curve — higher is smoother. */
     segments?: number;
     wallThickness?: number;
     color?: number;
     renderDepth?: number;
-    /** Same ground texture used for the outer background, so the tube reads as carved from it. */
     textureUrl?: string;
-    /** World units spanned by a single texture tile — matches GroundPlane's tiling scale. */
     tileWorldSize?: number;
 }
 
-/**
- * A tube whose walls follow an arbitrary curved path and whose half-width
- * varies along it (see NeckProfile). This is what lets the neck curve
- * while staying filled end-to-end with spheres, and it's what unifies the
- * old separate "neck" and "mouth" shapes into one continuous tube.
- *
- * Wall geometry and collision segments are built from the same offset
- * paths, so what's drawn is exactly what spheres bounce off.
- */
 export class TubeView {
     readonly leftColliders: SegmentCollider[];
     readonly rightColliders: SegmentCollider[];
@@ -70,9 +56,6 @@ export class TubeView {
                 map.repeat.set(repeatX, repeatY);
 
                 material.map = map;
-                // Darkens the shared ground texture below the outer background's brightness — the
-                // tube reads as the same rock, just in its own shadow — while staying lighter than
-                // TubeBackdrop's near-black fill so the wall itself doesn't disappear into "inside".
                 material.color.setHex(0x8c8c8c);
                 material.opacity = 0.92;
                 material.needsUpdate = true;
@@ -98,16 +81,6 @@ export class TubeView {
         const left: THREE.Vector2[] = [];
         const right: THREE.Vector2[] = [];
 
-        // The wall itself extends thickness/2 further inward from this centerline (see
-        // buildWallMesh, and the physics wall bodies built from these same points) — so placing
-        // the centerline exactly at halfWidthAt(t) would leave the wall's actual inner face
-        // thickness/2 *inside* the width everything else (SphereSpawner, the neck profile) treats
-        // as the clear passable boundary. Marbles can legitimately be packed right up to that
-        // boundary, so without this correction they'd spawn already overlapping the wall's physical
-        // thickness — a standing overlap the solver has to keep fighting, which is exactly the kind
-        // of localized, hard-to-diagnose jam this was causing. Pushing the centerline outward by
-        // thickness/2 puts the wall's real inner face exactly at halfWidthAt(t), matching what
-        // every consumer of that function already assumes.
         const halfThickness = thickness / 2;
 
         for (let i = 0; i <= segments; i++) {

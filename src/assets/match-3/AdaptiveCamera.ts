@@ -13,11 +13,6 @@ export interface AdaptiveCameraOptions {
     marginBottom?: number;
 }
 
-/**
- * Owns fov/distance/position for a single shared PerspectiveCamera.
- * Distance is fully solved from contentWidth/widthFraction/baseFov — it's
- * not a separate input, only the min/max clamp is configurable.
- */
 export class AdaptiveCamera {
     private camera: THREE.PerspectiveCamera;
     private contentWidth: number;

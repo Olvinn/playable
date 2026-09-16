@@ -10,12 +10,6 @@ export interface PhysicsSphereOptions {
     restitution?: number;
 }
 
-/**
- * A dynamic circle body, backed by a real Matter.js rigid body instead of the earlier hand-rolled
- * solver. collider.center/radius stay in the game's native (unscaled) world units regardless of
- * Matter's own internal scale — see MatterScale.ts — so everything outside physics/ (spawning,
- * rendering, despawn checks) reads exactly the same way it always did.
- */
 export class PhysicsSphere {
     readonly id: number;
     readonly body: Matter.Body;
@@ -31,11 +25,6 @@ export class PhysicsSphere {
             options.radius * MATTER_SCALE,
             {
                 restitution: options.restitution ?? 0.2,
-                // Low on purpose: real marbles are slick, and friction this low between spheres is
-                // also what keeps a packed pile from locking into a rigid, self-supporting arch —
-                // frictionStatic in particular is what lets grains wedge against each other and
-                // stay wedged. Too high here reads as the platform needing a "power lift" burst to
-                // break free rather than a steady, mouse-weight push sliding it along.
                 friction: 0.01,
                 frictionStatic: 0.02,
                 frictionAir: 0.01,
@@ -46,7 +35,6 @@ export class PhysicsSphere {
         }
     }
 
-    /** Pulls collider.center back from Matter's internal (scaled) body state. Called by PhysicsWorld after each step. */
     syncFromBody(): void {
         this.collider.center.set(this.body.position.x / MATTER_SCALE, this.body.position.y / MATTER_SCALE);
     }

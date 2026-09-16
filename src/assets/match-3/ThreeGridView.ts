@@ -20,14 +20,6 @@ export interface ThreeGridViewOptions {
     collapseDurationMs?: number;
 }
 
-/**
- * Renders the match-3 grid into a shared scene using a shared camera owned
- * elsewhere (see AdaptiveCamera). Cell size and gap are fixed, configured
- * world-space values — not derived from screen size — so grid geometry
- * never changes at runtime; only the camera adapts to fit it to the
- * screen. This keeps physics colliders, which reuse these same world
- * positions, valid without any resync on resize.
- */
 export class ThreeGridView implements IGridView {
     private rows: number;
     private cols: number;
@@ -152,17 +144,14 @@ export class ThreeGridView implements IGridView {
         }
     }
 
-    /** Fixed configured cell size (world units). */
     getCellSize(): number {
         return this.cellSize;
     }
 
-    /** Fixed configured gap between cells (world units). */
     getGap(): number {
         return this.gap;
     }
 
-    /** Cell center in the shared scene's XY plane — the same space physics operates in. */
     getCellCenter2D(row: number, col: number): THREE.Vector2 {
         const pos = this.cellWorldPos(row, col);
         return new THREE.Vector2(pos.x, pos.y);

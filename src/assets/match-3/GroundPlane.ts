@@ -6,19 +6,12 @@ export interface GroundPlaneOptions {
     normalMapUrl: string;
     width: number;
     height: number;
-    /** World units spanned by a single texture tile — keeps the tiling at a plausible physical scale regardless of plane size. */
     tileWorldSize: number;
     center: THREE.Vector2;
     renderDepth?: number;
     normalScale?: number;
 }
 
-/**
- * The lit backdrop behind the tube — real geometry with a MeshStandardMaterial,
- * not scene.background (which is a flat, unlit image with no concept of a
- * material or normal map). This is what lets the directional light actually
- * catch the normal map's bump detail instead of it just sitting there inert.
- */
 export class GroundPlane {
     private scene: THREE.Scene;
     private mesh: THREE.Mesh;

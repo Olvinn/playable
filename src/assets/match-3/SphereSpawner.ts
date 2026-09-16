@@ -11,36 +11,27 @@ export type SpawnRegion =
 export interface SphereSpawnerOptions {
     scene: THREE.Scene;
     world: PhysicsWorld;
-    /** Total number of spheres to spawn once, up front, across all fill regions combined. */
     totalSpheres: number;
-    /** Once a sphere's y drops below this, it's removed (fell through the grid, or the loss condition, depending on your design). */
     despawnY: number;
     radius: number;
+    radiusVariance?: number;
     colors?: number[];
-    /** Spacing between packed sphere centers, as a multiple of radius*2. >1 leaves a starting gap so spheres don't spawn touching. */
     packingFactor?: number;
-    /** Random jitter applied to each packed position, as a fraction of the spacing. 0 = perfectly uniform. */
     jitter?: number;
     mass?: number;
     restitution?: number;
-    /** Base z-depth spheres render at. */
     renderDepth?: number;
-    /** Random +/- range applied on top of renderDepth per sphere, for a layered look instead of every sphere at exactly the same depth. */
     renderDepthJitter?: number;
+    excludeNear?: { center: THREE.Vector2; radius: number };
 }
 
-/**
- * Spawns the full complement of spheres once, packed across one or more
- * fill regions (a curved NeckPath section and/or a straight box area) so
- * they start with minimal overlap. No spheres are created after this —
- * update() only handles despawning ones that fall below despawnY.
- */
 export class SphereSpawner {
     private scene: THREE.Scene;
     private world: PhysicsWorld;
     private totalSpheres: number;
     private despawnY: number;
     private radius: number;
+    private radiusVariance: number;
     private colors: number[];
     private packingFactor: number;
     private jitter: number;
@@ -48,6 +39,7 @@ export class SphereSpawner {
     private restitution: number;
     private renderDepth: number;
     private renderDepthJitter: number;
+    private excludeNear: { center: THREE.Vector2; radius: number } | null;
 
     private nextId = 0;
     private active: Map<number, { sphere: PhysicsSphere; view: PhysicsSphereView }> = new Map();
@@ -59,6 +51,7 @@ export class SphereSpawner {
         this.totalSpheres = options.totalSpheres;
         this.despawnY = options.despawnY;
         this.radius = options.radius;
+        this.radiusVariance = options.radiusVariance ?? 0;
         this.colors = options.colors ?? [0xffffff];
         this.packingFactor = options.packingFactor ?? 1.15;
         this.jitter = options.jitter ?? 0.15;
@@ -66,14 +59,13 @@ export class SphereSpawner {
         this.restitution = options.restitution ?? 0.2;
         this.renderDepth = options.renderDepth ?? 0.5;
         this.renderDepthJitter = options.renderDepthJitter ?? 0;
+        this.excludeNear = options.excludeNear ?? null;
     }
 
-    /** Fires right before a sphere that crossed despawnY is removed. */
     onDespawn(cb: (sphere: PhysicsSphere) => void): void {
         this.onDespawnCb = cb;
     }
 
-    /** Fills the given regions in order until totalSpheres is reached or every region is exhausted. */
     spawnAll(regions: SpawnRegion[]): void {
         let spawned = 0;
         for (const region of regions) {
@@ -85,7 +77,6 @@ export class SphereSpawner {
         }
     }
 
-    /** Handles despawning of spheres that fell below despawnY. No new spheres are created here. */
     update(): void {
         for (const [id, entry] of this.active) {
             entry.view.sync();
@@ -100,43 +91,6 @@ export class SphereSpawner {
 
     getActiveCount(): number {
         return this.active.size;
-    }
-
-    /**
-     * Removes up to `maxCount` of the active spheres whose arc-length position along `path` falls
-     * within [minT, maxT), closest to minT first — this is the actual link between playing the
-     * match-3 board and the platform being able to move at all. Without something like this, the
-     * platform's own push force is the *only* thing that determines whether/when it reaches the
-     * door, which makes the win condition entirely independent of anything the player does — not a
-     * design tradeoff, a broken game. Each successful match should call this to clear real space
-     * immediately ahead of the platform.
-     *
-     * Filtering by each sphere's own path position (not "nearest in world space" to a point) is
-     * deliberate: the serpentine tube folds back on itself, so a straight-line-nearest search could
-     * easily grab spheres from an adjacent run that's physically close by but arc-lengths away —
-     * wrong marbles entirely. Sampling findClosestT per sphere is only done here, on a match (rare,
-     * player-paced), not per frame, so the cost is a non-issue.
-     */
-    removeAheadOfPath(path: NeckPath, minT: number, maxT: number, maxCount: number): number {
-        const candidates: { id: number; t: number }[] = [];
-        for (const [id, entry] of this.active) {
-            const t = path.findClosestT(entry.sphere.collider.center);
-            if (t >= minT && t < maxT) candidates.push({ id, t });
-        }
-        candidates.sort((a, b) => a.t - b.t);
-
-        let removed = 0;
-        for (const { id } of candidates) {
-            if (removed >= maxCount) break;
-            const entry = this.active.get(id);
-            if (!entry) continue;
-            this.onDespawnCb?.(entry.sphere);
-            this.world.removeSphere(entry.sphere);
-            entry.view.destroy(this.scene);
-            this.active.delete(id);
-            removed++;
-        }
-        return removed;
     }
 
     private spawnAlongPath(region: Extract<SpawnRegion, { kind: 'path' }>, maxCount: number): number {
@@ -154,7 +108,7 @@ export class SphereSpawner {
             const normal = new THREE.Vector2(-tangent.y, tangent.x);
             const halfWidth = region.halfWidthAt(t);
             const lanes = Math.max(1, Math.floor((halfWidth * 2) / spacing));
-            const laneOffset = (i % 2 === 0) ? 0 : spacing / 2; // brick-like offset so lanes nest instead of stacking in straight columns
+            const laneOffset = (i % 2 === 0) ? 0 : spacing / 2;
 
             for (let lane = 0; lane < lanes && spawned < maxCount; lane++) {
                 const across = -halfWidth + this.radius + lane * spacing + laneOffset;
@@ -162,8 +116,7 @@ export class SphereSpawner {
 
                 const jitterAcross = (Math.random() * 2 - 1) * spacing * this.jitter;
                 const position = point.clone().addScaledVector(normal, across + jitterAcross);
-                this.spawnOne(position);
-                spawned++;
+                if (this.spawnOne(position)) spawned++;
             }
         }
         return spawned;
@@ -187,22 +140,24 @@ export class SphereSpawner {
 
                 const jitterX = (Math.random() * 2 - 1) * spacing * this.jitter;
                 const jitterY = (Math.random() * 2 - 1) * spacing * this.jitter;
-                this.spawnOne(new THREE.Vector2(baseX + jitterX, y + jitterY));
-                spawned++;
+                if (this.spawnOne(new THREE.Vector2(baseX + jitterX, y + jitterY))) spawned++;
             }
             row++;
         }
         return spawned;
     }
 
-    private spawnOne(position: THREE.Vector2): void {
+    private spawnOne(position: THREE.Vector2): boolean {
+        const radius = this.radius * (1 + (Math.random() * 2 - 1) * this.radiusVariance);
+        if (this.excludeNear && position.distanceTo(this.excludeNear.center) < this.excludeNear.radius + radius) return false;
+
         const sphere = new PhysicsSphere({
             id: this.nextId++,
             position,
-            radius: this.radius,
+            radius,
             mass: this.mass,
             restitution: this.restitution,
-        }); 
+        });
 
         const color = this.colors[Math.floor(Math.random() * this.colors.length)];
         const depth = this.renderDepth + (Math.random() * 2 - 1) * this.renderDepthJitter;
@@ -211,6 +166,7 @@ export class SphereSpawner {
         this.world.addSphere(sphere);
         view.spawn(this.scene);
         this.active.set(sphere.id, { sphere, view });
+        return true;
     }
 
     dispose(): void {

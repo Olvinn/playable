@@ -1,6 +1,5 @@
 ﻿import * as THREE from 'three';
 
-/** A bounded line segment, unlike LineCollider which is an infinite line. */
 export class SegmentCollider {
     a: THREE.Vector2;
     b: THREE.Vector2;
