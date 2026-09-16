@@ -11,6 +11,7 @@ import { SquareCollider } from './assets/match-3/physics/colliders/SquareCollide
 import { SphereSpawner } from './assets/match-3/SphereSpawner';
 import { TubeView } from './assets/match-3/TubeView';
 import { PlatformCharacter } from './assets/match-3/PlatformCharacter';
+import { ChaserPlatform } from './assets/match-3/ChaserPlatform';
 import { Door } from './assets/match-3/Door';
 import { GameOverlay } from './assets/match-3/GameOverlay';
 import { TubeBackdrop } from './assets/match-3/TubeBackdrop';
@@ -167,12 +168,25 @@ const CHARACTER_COLOR = 0xff4477;
 // reaching it at all). The gap between there and here is meant to be closed by
 // SphereSpawner.removeAheadOfPath, called from onBoardChanged on every successful match — reaching
 // this now requires actually clearing marbles via the board, not just letting the platform sit.
-const DOOR_T = 0.85;
+//
+// Also chosen to land just past neckFraction (~0.948, where SerpentineWaypoints' own comments
+// guarantee the path is straight and centered on bottom.x=0) rather than inside the last hairpin
+// bend (0.85 used to sit there, at x≈+1.18 — visibly off-center). An earlier attempt to recenter
+// that by shifting the whole serpentine sideways (SERPENTINE_TOP_X_OFFSET) instead distorted the
+// merge curve into a visible pinch, since the merge's own shape depends on the gap between the
+// last run's end and bottom.x. Moving the door instead of the tube gets an exactly-centered point
+// (verified: x≈-0.001) for free, with zero change to the tube's actual shape.
+const DOOR_T = 0.95;
 const DOOR_HEIGHT = 0.8;
 const DOOR_COLOR = 0xd9a441;
 
-// --- Timer (lose condition: run out before reaching the door) ---
-const TIME_LIMIT_SECONDS = 30;
+// --- Chaser (lose condition: an unstoppable wall crawling down the tube behind the player,
+// replacing a plain countdown — see ChaserPlatform.ts) ---
+// NeckPath is arc-length parameterized, so a constant t-per-second rate is a genuinely constant
+// world-space crawl speed. Tuned to cross the same t=0.95 (DOOR_T) span in about the same ~30s
+// the old timer gave, as a starting difficulty baseline — re-tune by feel, not by re-deriving this.
+const CHASER_SPEED_T_PER_SECOND = DOOR_T / 30;
+const CHASER_COLOR = 0xaa2222;
 
 // --- Render depths ---
 const DEPTH_TUBE_WALLS = 0.4;
@@ -411,13 +425,21 @@ spawner.spawnAll([
 // RESCUE PLATFORM + CHARACTER — starts resting on top of the full pile
 // ============================================================
 
-// Set once, by whichever of win/lose fires first — guards against the timer expiring the same
+// Set once, by whichever of win/lose fires first — guards against the chaser catching up the same
 // frame the door's reached, or either firing twice.
 let gameEnded = false;
 
 const gameOverlay = new GameOverlay({
     onRestart: () => window.location.reload(),
 });
+
+// Reaching arrivalT only stops the platform (see PlatformCharacter) — it doesn't win on its own
+// anymore. The door itself still has marbles resting in front of it whenever the platform's own
+// width doesn't fully seal the tube there, or a few slide past its sides after it's already
+// frozen; a win the instant the platform arrives could fire with the door still visibly blocked.
+// platformArrived just records that the platform has done its part; isDoorClear() (checked every
+// frame below) is what actually gates the win on the door being visibly, physically open.
+let platformArrived = false;
 
 const platformCharacter = new PlatformCharacter({
     scene,
@@ -431,12 +453,21 @@ const platformCharacter = new PlatformCharacter({
     pushAcceleration: PLATFORM_PUSH_ACCELERATION,
     arrivalT: DOOR_T,
     onArrive: () => {
-        if (gameEnded) return;
-        gameEnded = true;
-        gameOverlay.showWin();
+        platformArrived = true;
     },
     platformColor: PLATFORM_COLOR,
     characterColor: CHARACTER_COLOR,
+    renderDepth: DEPTH_PLATFORM,
+});
+
+// Starts at t=0, right behind the platform's own PLATFORM_START_T — see ChaserPlatform for why it
+// has no physics body of its own.
+const chaser = new ChaserPlatform({
+    scene,
+    path: neckPath,
+    halfWidthAt: neckProfile,
+    speedTPerSecond: CHASER_SPEED_T_PER_SECOND,
+    color: CHASER_COLOR,
     renderDepth: DEPTH_PLATFORM,
 });
 
@@ -444,15 +475,34 @@ const platformCharacter = new PlatformCharacter({
 // DOOR — the win target, partway up the tube (see DOOR_T)
 // ============================================================
 
+const doorCenter = neckPath.getPoint(DOOR_T);
+const doorHalfWidth = neckProfile(DOOR_T);
+
 new Door({
     scene,
-    center: neckPath.getPoint(DOOR_T),
-    halfWidth: neckProfile(DOOR_T),
+    center: doorCenter,
+    halfWidth: doorHalfWidth,
     height: DOOR_HEIGHT,
     color: DOOR_COLOR,
     renderDepth: DEPTH_DOOR,
     textureUrl: '/textures/door.png',
 });
+
+// True once no marble's body overlaps the door's own footprint (a sphere counts as still
+// blocking it if its edge, not just its center, crosses into the rectangle) — checked every frame
+// once the platform's arrived, since marbles can keep sliding past a platform that doesn't fully
+// seal the tube's width right up until the door is actually visibly clear.
+const doorHalfHeight = DOOR_HEIGHT / 2;
+function isDoorClear(): boolean {
+    for (const sphere of physicsWorld.getSpheres()) {
+        const { center, radius } = sphere.collider;
+        if (Math.abs(center.x - doorCenter.x) < doorHalfWidth + radius
+            && Math.abs(center.y - doorCenter.y) < doorHalfHeight + radius) {
+            return false;
+        }
+    }
+    return true;
+}
 
 // ============================================================
 // MATCH-3 <-> TUBE LINK
@@ -481,8 +531,6 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-let elapsedSeconds = 0;
-
 let lastTime = performance.now();
 function animate() {
     requestAnimationFrame(animate);
@@ -496,14 +544,17 @@ function animate() {
         platformCharacter.sync();
         physicsWorld.step(deltaSeconds);
         platformCharacter.clampSpeed();
+        chaser.update(deltaSeconds);
 
-        elapsedSeconds += deltaSeconds;
-        const remainingSeconds = TIME_LIMIT_SECONDS - elapsedSeconds;
-        gameOverlay.updateTimer(elapsedSeconds / TIME_LIMIT_SECONDS, remainingSeconds);
-
-        if (remainingSeconds <= 0) {
+        if (platformArrived && isDoorClear()) {
             gameEnded = true;
-            gameOverlay.showLose();
+            gameOverlay.showWin();
+        } else {
+            const playerT = neckPath.findClosestT(platformCharacter.box.collider.center);
+            if (chaser.t >= playerT) {
+                gameEnded = true;
+                gameOverlay.showLose();
+            }
         }
     }
 

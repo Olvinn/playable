@@ -22,14 +22,15 @@ export class PhysicsSphereView {
         const material = new THREE.MeshPhysicalMaterial({
             color,
             attenuationColor: color,
-            // Shorter than the sphere's own diameter so light passing through picks up a strong,
-            // saturated tint instead of reading as barely-tinted clear glass.
-            attenuationDistance: sphere.collider.radius * 0.8,
+            // Longer than before (was 0.8x radius) so light passing through builds up color more
+            // gradually — still reads as colored glass, just lighter/more see-through rather than
+            // near-opaque at the core, per direct feedback that marbles were hiding what's behind.
+            attenuationDistance: sphere.collider.radius * 1.6,
             emissive: color,
-            emissiveIntensity: 0.25,
+            emissiveIntensity: 0.12,
             roughness: 0.05,
             metalness: 0,
-            transmission: 0.95,
+            transmission: 0.98,
             ior: 1.5,
             thickness: sphere.collider.radius * 2,
             clearcoat: 1,
