@@ -1,4 +1,5 @@
 import Matter from 'matter-js';
+import * as THREE from 'three';
 import { PhysicsSphere } from './PhysicsSphere';
 import { PhysicsBox } from './PhysicsBox';
 import { SquareCollider } from './colliders/SquareCollider';
@@ -14,7 +15,6 @@ export class PhysicsWorld {
     private spheres: PhysicsSphere[] = [];
     private boxes: PhysicsBox[] = [];
     private wallBodies: Matter.Body[] = [];
-    private gridBodiesById: Map<string, Matter.Body> = new Map();
 
     constructor(options: PhysicsWorldOptions = {}) {
         this.engine = Matter.Engine.create();
@@ -83,29 +83,24 @@ export class PhysicsWorld {
         Matter.Composite.add(this.engine.world, bodies);
     }
 
-    setGridColliders(colliders: SquareCollider[]): void {
-        const nextIds = new Set(colliders.map(c => c.cellId));
+    addGridCollider(center: THREE.Vector2, halfExtents: THREE.Vector2): Matter.Body {
+        const body = Matter.Bodies.rectangle(
+            center.x * MATTER_SCALE,
+            center.y * MATTER_SCALE,
+            halfExtents.x * 2 * MATTER_SCALE,
+            halfExtents.y * 2 * MATTER_SCALE,
+            { isStatic: true, friction: 0.05, restitution: 0.1 }
+        );
+        Matter.Composite.add(this.engine.world, body);
+        return body;
+    }
 
-        for (const [id, body] of this.gridBodiesById) {
-            if (nextIds.has(id)) continue;
-            Matter.Composite.remove(this.engine.world, body);
-            this.gridBodiesById.delete(id);
-        }
+    removeGridCollider(body: Matter.Body): void {
+        Matter.Composite.remove(this.engine.world, body);
+    }
 
-        const added: Matter.Body[] = [];
-        for (const collider of colliders) {
-            if (this.gridBodiesById.has(collider.cellId)) continue;
-            const body = Matter.Bodies.rectangle(
-                collider.center.x * MATTER_SCALE,
-                collider.center.y * MATTER_SCALE,
-                collider.halfExtents.x * 2 * MATTER_SCALE,
-                collider.halfExtents.y * 2 * MATTER_SCALE,
-                { isStatic: true, friction: 0.05, restitution: 0.1 }
-            );
-            this.gridBodiesById.set(collider.cellId, body);
-            added.push(body);
-        }
-        if (added.length > 0) Matter.Composite.add(this.engine.world, added);
+    setGridColliderPosition(body: Matter.Body, center: THREE.Vector2): void {
+        Matter.Body.setPosition(body, { x: center.x * MATTER_SCALE, y: center.y * MATTER_SCALE });
     }
 
     step(_deltaSeconds: number): void {

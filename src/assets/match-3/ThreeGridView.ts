@@ -2,6 +2,7 @@
 import { CellCoord, type CellValue } from './GridModel';
 import type { IGridView } from './IGridView';
 import { GridBox } from './GridBox';
+import { PhysicsWorld } from './physics/PhysicsWorld';
 
 export interface ThreeGridViewOptions {
     rows: number;
@@ -11,6 +12,8 @@ export interface ThreeGridViewOptions {
     renderer: THREE.WebGLRenderer;
     cellSize: number;
     gap: number;
+    boxGeometry: THREE.BufferGeometry;
+    physicsWorld: PhysicsWorld;
     centerX?: number;
     colors?: number[];
     highlightColor?: number;
@@ -25,6 +28,8 @@ export class ThreeGridView implements IGridView {
     private cols: number;
     private cellSize: number;
     private gap: number;
+    private boxGeometry: THREE.BufferGeometry;
+    private physicsWorld: PhysicsWorld;
     private centerX: number;
     private colors: number[];
     private highlightColor: number;
@@ -49,6 +54,8 @@ export class ThreeGridView implements IGridView {
         this.cols = options.cols;
         this.cellSize = options.cellSize;
         this.gap = options.gap;
+        this.boxGeometry = options.boxGeometry;
+        this.physicsWorld = options.physicsWorld;
         this.centerX = options.centerX ?? 0;
         this.scene = options.scene;
         this.camera = options.camera;
@@ -64,12 +71,16 @@ export class ThreeGridView implements IGridView {
     }
 
     renderInitial(grid: CellValue[][]): void {
+        const colliderHalfSize = (this.cellSize + this.gap) / 2 + 0.01;
         for (let r = 0; r < this.rows; r++) {
             this.boxes.push([]);
             for (let c = 0; c < this.cols; c++) {
                 const box = new GridBox(grid[r][c], {
                     size: this.cellSize,
                     colors: this.colors,
+                    geometry: this.boxGeometry,
+                    physicsWorld: this.physicsWorld,
+                    colliderHalfSize,
                     highlightColor: this.highlightColor,
                     depthRatio: this.depthRatio,
                 });

@@ -95,6 +95,7 @@ export class SphereSpawner {
 
     private spawnAlongPath(region: Extract<SpawnRegion, { kind: 'path' }>, maxCount: number): number {
         const spacing = this.radius * 2 * this.packingFactor;
+        const maxRadius = this.radius * (1 + this.radiusVariance);
         const startT = region.startT ?? 0;
         const endT = region.endT ?? 1;
         const pathLength = region.path.length * (endT - startT);
@@ -111,11 +112,11 @@ export class SphereSpawner {
             const laneOffset = (i % 2 === 0) ? 0 : spacing / 2;
 
             for (let lane = 0; lane < lanes && spawned < maxCount; lane++) {
-                const across = -halfWidth + this.radius + lane * spacing + laneOffset;
-                if (across > halfWidth - this.radius) continue;
-
                 const jitterAcross = (Math.random() * 2 - 1) * spacing * this.jitter;
-                const position = point.clone().addScaledVector(normal, across + jitterAcross);
+                const across = -halfWidth + maxRadius + lane * spacing + laneOffset + jitterAcross;
+                if (across < -halfWidth + maxRadius || across > halfWidth - maxRadius) continue;
+
+                const position = point.clone().addScaledVector(normal, across);
                 if (this.spawnOne(position)) spawned++;
             }
         }

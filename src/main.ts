@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { GridModel } from './assets/match-3/GridModel';
 import { ThreeGridView } from './assets/match-3/ThreeGridView';
 import { GridController } from './assets/match-3/GridController';
 import { GridGenerator } from './assets/match-3/GridGenerator';
-import { buildGridColliders } from './assets/match-3/GridColliderSync';
 import { AdaptiveCamera } from './assets/match-3/AdaptiveCamera';
 import { PhysicsWorld } from './assets/match-3/physics/PhysicsWorld';
 import { SquareCollider } from './assets/match-3/physics/colliders/SquareCollider';
@@ -94,6 +94,11 @@ const DOOR_COLOR = 0xd9a441;
 const CHASER_SPEED_T_PER_SECOND = DOOR_T / 30;
 const CHASER_COLOR = 0xaa2222;
 
+const INTRO_HOLD_SECONDS = 0.8;
+const INTRO_FADE_SECONDS = 1;
+const INTRO_PUSH_DELAY_SECONDS = INTRO_HOLD_SECONDS;
+const INTRO_CHASER_DELAY_SECONDS = INTRO_PUSH_DELAY_SECONDS + 3;
+
 const DEPTH_TUBE_WALLS = 0.4;
 const DEPTH_PLATFORM = 0.5;
 const DEPTH_DOOR = -0.2;
@@ -116,10 +121,29 @@ pmremGenerator.dispose();
 
 new Vignette({ strength: VIGNETTE_STRENGTH, innerRadiusPercent: VIGNETTE_INNER_RADIUS_PERCENT });
 
+const introFade = document.createElement('div');
+introFade.style.cssText = [
+    'position:fixed', 'inset:0', 'background:#000', 'z-index:20', 'pointer-events:none',
+    `transition:opacity ${INTRO_FADE_SECONDS}s ease`, 'opacity:1',
+].join(';');
+document.body.appendChild(introFade);
+setTimeout(() => { introFade.style.opacity = '0'; }, INTRO_HOLD_SECONDS * 1000);
+setTimeout(() => introFade.remove(), (INTRO_HOLD_SECONDS + INTRO_FADE_SECONDS) * 1000);
+
 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
 dirLight.position.set(3, 5, 4);
 scene.add(dirLight);
+
+const cubeGltf = await new GLTFLoader().loadAsync('/meshes/cube.glb');
+let gridBoxGeometry: THREE.BufferGeometry | undefined;
+cubeGltf.scene.traverse((child) => {
+    if (!gridBoxGeometry && child instanceof THREE.Mesh) gridBoxGeometry = child.geometry;
+});
+if (!gridBoxGeometry) throw new Error('cube.glb contains no mesh');
+gridBoxGeometry.scale(0.5, 0.5, 0.5);
+
+const physicsWorld = new PhysicsWorld({ gravity: PHYSICS_GRAVITY });
 
 const gridGenerator = new GridGenerator({ rows: GRID_ROWS, cols: GRID_COLS, colorCount: GRID_COLOR_COUNT });
 const gridModel = new GridModel(gridGenerator);
@@ -131,6 +155,8 @@ const gridView = new ThreeGridView({
     renderer,
     cellSize: GRID_CELL_SIZE,
     gap: GRID_CELL_GAP,
+    boxGeometry: gridBoxGeometry,
+    physicsWorld,
 });
 
 const gridWidth = GRID_COLS * GRID_CELL_SIZE + (GRID_COLS - 1) * GRID_CELL_GAP;
@@ -152,14 +178,6 @@ const adaptiveCamera = new AdaptiveCamera({
     tiltDeg: CAMERA_TILT_DEG,
     marginBottom: CAMERA_MARGIN_BOTTOM,
 });
-
-const physicsWorld = new PhysicsWorld({ gravity: PHYSICS_GRAVITY });
-
-function syncBoxColliders(): void {
-    physicsWorld.setGridColliders(buildGridColliders(gridModel, gridView));
-}
-
-syncBoxColliders();
 
 const gridTopRowY = gridView.getCellCenter2D(0, 0).y;
 
@@ -390,7 +408,7 @@ function isDoorClear(): boolean {
     return true;
 }
 
-new GridController(gridModel, gridView, { onCellsCleared: syncBoxColliders });
+new GridController(gridModel, gridView);
 
 window.addEventListener('resize', () => {
     adaptiveCamera.handleResize();
@@ -398,6 +416,7 @@ window.addEventListener('resize', () => {
 });
 
 let lastTime = performance.now();
+let elapsedSeconds = 0;
 function animate() {
     requestAnimationFrame(animate);
     const now = performance.now();
@@ -405,12 +424,17 @@ function animate() {
     lastTime = now;
 
     if (!gameEnded) {
+        elapsedSeconds += deltaSeconds;
         spawner.update();
-        platformCharacter.pushTowardDoor(neckPath, deltaSeconds);
+        if (elapsedSeconds >= INTRO_PUSH_DELAY_SECONDS) {
+            platformCharacter.pushTowardDoor(neckPath, deltaSeconds);
+        }
         platformCharacter.sync();
         physicsWorld.step(deltaSeconds);
         platformCharacter.clampSpeed();
-        chaser.update(deltaSeconds);
+        if (elapsedSeconds >= INTRO_CHASER_DELAY_SECONDS) {
+            chaser.update(deltaSeconds);
+        }
 
         if (platformArrived && isDoorClear()) {
             gameEnded = true;

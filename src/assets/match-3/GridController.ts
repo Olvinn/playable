@@ -1,22 +1,16 @@
 ﻿import { CellCoord, GridModel } from './GridModel';
 import type { IGridView } from './IGridView';
 
-export interface GridControllerOptions {
-    onCellsCleared?: () => void;
-}
-
 export class GridController {
     private selected: CellCoord | null = null;
     private pointerDownCell: CellCoord | null = null;
     private isBusy = false;
     private model: GridModel;
     private view: IGridView;
-    private onCellsCleared: (() => void) | null;
 
-    constructor(model: GridModel, view: IGridView, options: GridControllerOptions = {}) {
+    constructor(model: GridModel, view: IGridView) {
         this.model = model;
         this.view = view;
-        this.onCellsCleared = options.onCellsCleared ?? null;
         this.view.renderInitial(model.serialize());
         this.view.onCellPointerDown(cell => this.handlePointerDown(cell));
         this.view.onCellPointerUp(cell => this.handlePointerUp(cell));
@@ -70,7 +64,6 @@ export class GridController {
         while (current) {
             const cleared = this.model.clearMatches(current);
             await this.view.animateMatched(cleared);
-            this.onCellsCleared?.();
 
             const moves = this.model.collapse();
             await this.view.animateCollapse(moves);
