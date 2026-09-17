@@ -85,7 +85,6 @@ const PLATFORM_RESTITUTION = 0.05;
 const PLATFORM_PUSH_ACCELERATION = 3.5 * PHYSICS_GRAVITY;
 const PLATFORM_COLOR = 0x8899aa;
 const CHARACTER_SIZE = 0.3;
-const CHARACTER_COLOR = 0xff4477;
 
 const DOOR_T = 0.95;
 const DOOR_HEIGHT = 0.8;
@@ -93,6 +92,7 @@ const DOOR_COLOR = 0xd9a441;
 
 const CHASER_SPEED_T_PER_SECOND = DOOR_T / 30;
 const CHASER_COLOR = 0xaa2222;
+const CHASER_CATCH_MARGIN_WORLD = 0.35;
 
 const INTRO_HOLD_SECONDS = 0.8;
 const INTRO_FADE_SECONDS = 1;
@@ -142,6 +142,22 @@ cubeGltf.scene.traverse((child) => {
 });
 if (!gridBoxGeometry) throw new Error('cube.glb contains no mesh');
 gridBoxGeometry.scale(0.5, 0.5, 0.5);
+
+const CHARACTER_MODEL_SCALE = 1.8;
+
+const mouseGltf = await new GLTFLoader().loadAsync('/meshes/Mice/scene.gltf');
+const mouseModel = mouseGltf.scene;
+mouseModel.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+        const material = child.material as THREE.MeshStandardMaterial;
+        material.transparent = false;
+        material.opacity = 1;
+        material.depthWrite = true;
+    }
+});
+const mouseSize = new THREE.Box3().setFromObject(mouseModel).getSize(new THREE.Vector3());
+mouseModel.scale.setScalar(CHARACTER_SIZE * CHARACTER_MODEL_SCALE / Math.max(mouseSize.x, mouseSize.y, mouseSize.z));
+mouseModel.position.y -= new THREE.Box3().setFromObject(mouseModel).min.y;
 
 const physicsWorld = new PhysicsWorld({ gravity: PHYSICS_GRAVITY });
 
@@ -207,6 +223,9 @@ const { waypoints: neckWaypoints, straightApproachStart } = buildSerpentineWaypo
     runSlopeFraction: SERPENTINE_RUN_SLOPE_FRACTION,
 });
 const neckPath = new NeckPath({ waypoints: neckWaypoints });
+const CHASER_CATCH_MARGIN_T = CHASER_CATCH_MARGIN_WORLD / neckPath.length;
+const CHASER_START_BUFFER_WORLD = 0.6;
+const CHASER_START_T = PLATFORM_START_T - CHASER_CATCH_MARGIN_T - CHASER_START_BUFFER_WORLD / neckPath.length;
 
 const neckFraction = neckPath.findClosestT(straightApproachStart);
 
@@ -401,6 +420,7 @@ const platformCharacter = new PlatformCharacter({
     platformHalfWidth: PLATFORM_HALF_WIDTH,
     platformHalfThickness: PLATFORM_HALF_THICKNESS,
     characterSize: CHARACTER_SIZE,
+    characterModel: mouseModel,
     mass: PLATFORM_MASS,
     restitution: PLATFORM_RESTITUTION,
     pushAcceleration: PLATFORM_PUSH_ACCELERATION,
@@ -409,7 +429,6 @@ const platformCharacter = new PlatformCharacter({
         platformArrived = true;
     },
     platformColor: PLATFORM_COLOR,
-    characterColor: CHARACTER_COLOR,
     renderDepth: DEPTH_PLATFORM,
 });
 
@@ -418,6 +437,7 @@ const chaser = new ChaserPlatform({
     path: neckPath,
     halfWidthAt: neckProfile,
     speedTPerSecond: CHASER_SPEED_T_PER_SECOND,
+    startT: CHASER_START_T,
     color: CHASER_COLOR,
     renderDepth: DEPTH_PLATFORM,
 });
@@ -481,7 +501,7 @@ function animate() {
             gameOverlay.showWin();
         } else {
             const playerT = neckPath.findClosestT(platformCharacter.box.collider.center);
-            if (chaser.t >= playerT) {
+            if (chaser.t + CHASER_CATCH_MARGIN_T >= playerT) {
                 gameEnded = true;
                 gameOverlay.showLose();
             }

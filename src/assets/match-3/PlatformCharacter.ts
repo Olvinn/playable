@@ -11,13 +11,13 @@ export interface PlatformCharacterOptions {
     platformHalfWidth: number;
     platformHalfThickness: number;
     characterSize: number;
+    characterModel: THREE.Object3D;
     mass?: number;
     restitution?: number;
     pushAcceleration?: number;
     arrivalT?: number;
     onArrive?: () => void;
     platformColor?: number;
-    characterColor?: number;
     renderDepth?: number;
 }
 
@@ -29,7 +29,7 @@ export class PlatformCharacter {
     private world: PhysicsWorld;
     private group: THREE.Group;
     private platformMesh: THREE.Mesh;
-    private characterMesh: THREE.Mesh;
+    private characterMesh: THREE.Object3D;
     private pushAcceleration: number;
     private arrivalT: number;
     private onArrive: (() => void) | undefined;
@@ -75,10 +75,8 @@ export class PlatformCharacter {
         const platformMaterial = new THREE.MeshStandardMaterial({ color: options.platformColor ?? 0x8899aa });
         this.platformMesh = new THREE.Mesh(platformGeometry, platformMaterial);
 
-        const characterGeometry = new THREE.BoxGeometry(options.characterSize, options.characterSize, depth);
-        const characterMaterial = new THREE.MeshStandardMaterial({ color: options.characterColor ?? 0xff4477 });
-        this.characterMesh = new THREE.Mesh(characterGeometry, characterMaterial);
-        this.characterMesh.position.y = this.characterOffset;
+        this.characterMesh = options.characterModel;
+        this.characterMesh.position.y += options.platformHalfThickness;
 
         this.group = new THREE.Group();
         this.group.add(this.platformMesh, this.characterMesh);
@@ -145,7 +143,11 @@ export class PlatformCharacter {
         this.scene.remove(this.group);
         this.platformMesh.geometry.dispose();
         (this.platformMesh.material as THREE.Material).dispose();
-        this.characterMesh.geometry.dispose();
-        (this.characterMesh.material as THREE.Material).dispose();
+        this.characterMesh.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                child.geometry.dispose();
+                (child.material as THREE.Material).dispose();
+            }
+        });
     }
 }
