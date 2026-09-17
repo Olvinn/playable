@@ -248,11 +248,13 @@ const topExtensionHalfWidth = (): number => NECK_HALF_WIDTH;
 
 const topExtensionMarbleEndT = 1 - (PLATFORM_HALF_WIDTH + CHARACTER_SIZE) / TUBE_TOP_EXTENSION_LENGTH;
 
+const topExtensionWallSegments = Math.ceil(TUBE_TOP_EXTENSION_LENGTH / (TUBE_WALL_THICKNESS / 3));
+
 const topExtensionTube = new TubeView({
     scene,
     path: topExtensionPath,
     halfWidthAt: topExtensionHalfWidth,
-    segments: 2,
+    segments: topExtensionWallSegments,
     wallThickness: TUBE_WALL_THICKNESS,
     renderDepth: DEPTH_TUBE_WALLS,
     textureUrl: BACKGROUND_TEXTURE_URL,
@@ -268,23 +270,31 @@ new TubeBackdrop({
     renderDepth: DEPTH_TUBE_BACKDROP,
 });
 
-const topExtensionBarrierCenter = topExtensionPath.getPoint(topExtensionMarbleEndT);
-const topExtensionBarrierNormal = new THREE.Vector2(-tubeSeamTangent.y, tubeSeamTangent.x);
-const topExtensionBarrierSamples = 10;
-const topExtensionBarrierChain: SegmentCollider[] = [];
-let topExtensionBarrierPrev = topExtensionBarrierCenter.clone().addScaledVector(topExtensionBarrierNormal, -NECK_HALF_WIDTH);
-for (let i = 1; i <= topExtensionBarrierSamples; i++) {
-    const across = -NECK_HALF_WIDTH + (2 * NECK_HALF_WIDTH) * (i / topExtensionBarrierSamples);
-    const next = topExtensionBarrierCenter.clone().addScaledVector(topExtensionBarrierNormal, across);
-    topExtensionBarrierChain.push(new SegmentCollider(topExtensionBarrierPrev, next));
-    topExtensionBarrierPrev = next;
+function buildCrossBarrier(center: THREE.Vector2, normal: THREE.Vector2, halfWidth: number, samples = 10): SegmentCollider[] {
+    const chain: SegmentCollider[] = [];
+    let prev = center.clone().addScaledVector(normal, -halfWidth);
+    for (let i = 1; i <= samples; i++) {
+        const across = -halfWidth + (2 * halfWidth) * (i / samples);
+        const next = center.clone().addScaledVector(normal, across);
+        chain.push(new SegmentCollider(prev, next));
+        prev = next;
+    }
+    return chain;
 }
+
+const topExtensionBarrierNormal = new THREE.Vector2(-tubeSeamTangent.y, tubeSeamTangent.x);
+const topExtensionBarrierChain = buildCrossBarrier(
+    topExtensionPath.getPoint(topExtensionMarbleEndT), topExtensionBarrierNormal, NECK_HALF_WIDTH
+);
+const topExtensionDeadEndBarrierChain = buildCrossBarrier(
+    topExtensionPath.getPoint(0), topExtensionBarrierNormal, NECK_HALF_WIDTH
+);
 
 physicsWorld.setStaticWalls(
     [
         tubeView.leftColliders, tubeView.rightColliders,
         topExtensionTube.leftColliders, topExtensionTube.rightColliders,
-        topExtensionBarrierChain,
+        topExtensionBarrierChain, topExtensionDeadEndBarrierChain,
     ],
     TUBE_WALL_THICKNESS
 );
@@ -305,6 +315,11 @@ physicsWorld.addStaticBoxes([
     ),
 ]);
 
+const characterExclusion = {
+    center: neckPath.getPoint(PLATFORM_START_T),
+    radius: PLATFORM_HALF_WIDTH + CHARACTER_SIZE,
+};
+
 const spawner = new SphereSpawner({
     scene,
     world: physicsWorld,
@@ -319,10 +334,7 @@ const spawner = new SphereSpawner({
     restitution: SPHERE_RESTITUTION,
     renderDepth: DEPTH_SPHERE_BASE,
     renderDepthJitter: DEPTH_SPHERE_JITTER,
-    excludeNear: {
-        center: neckPath.getPoint(PLATFORM_START_T),
-        radius: PLATFORM_HALF_WIDTH + CHARACTER_SIZE,
-    },
+    excludeNear: characterExclusion,
 });
 
 const gridTopSurfaceY = gridTopRowY + (GRID_CELL_SIZE + GRID_CELL_GAP) / 2 + 0.01;
@@ -345,6 +357,33 @@ spawner.spawnAll([
         endT: marbleFillEndT,
     },
 ]);
+
+const topExtensionStart = topExtensionPath.getPoint(0);
+const topExtensionEnd = topExtensionPath.getPoint(1);
+const topExtensionDelta = topExtensionEnd.clone().sub(topExtensionStart);
+const topExtensionLengthSq = topExtensionDelta.lengthSq();
+
+function isOnTopExtension(position: THREE.Vector2): boolean {
+    const along = position.clone().sub(topExtensionStart).dot(topExtensionDelta) / topExtensionLengthSq;
+    if (along < 0 || along > 1) return false;
+    const closest = topExtensionStart.clone().addScaledVector(topExtensionDelta, along);
+    return position.distanceTo(closest) <= topExtensionHalfWidth() + TUBE_WALL_THICKNESS;
+}
+
+const SCREEN_MARGIN_NDC = 0.1;
+
+function isOnScreen(position: THREE.Vector2): boolean {
+    const ndc = new THREE.Vector3(position.x, position.y, 0).project(camera);
+    return ndc.x >= -1 - SCREEN_MARGIN_NDC && ndc.x <= 1 + SCREEN_MARGIN_NDC
+        && ndc.y >= -1 - SCREEN_MARGIN_NDC && ndc.y <= 1 + SCREEN_MARGIN_NDC
+        && ndc.z < 1;
+}
+
+function isVisibleExtensionMarble(position: THREE.Vector2): boolean {
+    return isOnTopExtension(position) && isOnScreen(position);
+}
+
+spawner.removeWhere(isVisibleExtensionMarble);
 
 let gameEnded = false;
 
@@ -426,6 +465,7 @@ function animate() {
     if (!gameEnded) {
         elapsedSeconds += deltaSeconds;
         spawner.update();
+        spawner.removeWhere(isVisibleExtensionMarble);
         if (elapsedSeconds >= INTRO_PUSH_DELAY_SECONDS) {
             platformCharacter.pushTowardDoor(neckPath, deltaSeconds);
         }

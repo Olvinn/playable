@@ -93,6 +93,18 @@ export class SphereSpawner {
         return this.active.size;
     }
 
+    removeWhere(predicate: (position: THREE.Vector2) => boolean): number {
+        let removed = 0;
+        for (const [id, entry] of this.active) {
+            if (!predicate(entry.sphere.collider.center)) continue;
+            this.world.removeSphere(entry.sphere);
+            entry.view.destroy(this.scene);
+            this.active.delete(id);
+            removed++;
+        }
+        return removed;
+    }
+
     private spawnAlongPath(region: Extract<SpawnRegion, { kind: 'path' }>, maxCount: number): number {
         const spacing = this.radius * 2 * this.packingFactor;
         const maxRadius = this.radius * (1 + this.radiusVariance);
